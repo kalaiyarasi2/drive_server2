@@ -57,7 +57,16 @@ class SchemaOCRExtractor:
             
         try:
             # Most OCR libraries use one of these standard method names
-            if hasattr(self.ocr_engine, 'process_document'):
+            if hasattr(self.ocr_engine, 'ocr_extractor'):
+                temp_output = self.pdf_path.with_suffix('.rostaing_temp.txt')
+                self.ocr_engine.ocr_extractor(str(self.pdf_path), output_file=str(temp_output))
+                if temp_output.exists():
+                    with open(temp_output, 'r', encoding='utf-8') as temp_f:
+                        self.output_text = temp_f.read()
+                    temp_output.unlink()  # Clean up temp file
+                else:
+                    self.output_text = ""
+            elif hasattr(self.ocr_engine, 'process_document'):
                 self.output_text = self.ocr_engine.process_document(str(self.pdf_path))
             elif hasattr(self.ocr_engine, 'extract'):
                 self.output_text = self.ocr_engine.extract(str(self.pdf_path))
