@@ -110,7 +110,7 @@ async def health_check():
         "version": API_VERSION,
         "supported_types": ["PDF", "XLSX", "XLS", "CSV"],
         "extract_endpoint": "POST /api/extract  (multipart/form-data, field name: 'file')",
-        "example_curl": 'curl -X POST http://<host>:8007/api/extract -F "file=@yourfile.pdf"'
+        "example_curl": 'curl -X POST http://<host>:8008/api/extract -F "file=@yourfile.pdf"'
     }
 
 @app.get("/docs", include_in_schema=False)
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     import sys
     
     # [DYNAMIC] Port Selection
-    port = 8007
+    port = 8008
     if "--port" in sys.argv:
         try:
             port_idx = sys.argv.index("--port")

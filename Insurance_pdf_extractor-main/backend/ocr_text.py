@@ -108,7 +108,7 @@ class OCRPDFExtractor:
                 page_text_hi = text_hi if text_hi.strip() else "[No text detected on this page]\n"
                 
                 # Check for reversal early and correct if necessary
-                if self._check_if_reversed(page_text_hi):
+                if verifier.analyze_quality(page_text_hi).get('metrics', {}).get('reversed_marker_count', 0) >= 2:
                     if verbose: print(f"   ⚠️ Detected reversed text encoding at 600 DPI. Correcting...")
                     page_text_hi = self._reverse_text_block(page_text_hi)
                 
@@ -145,7 +145,7 @@ class OCRPDFExtractor:
                             page_text_mid = text_mid if text_mid.strip() else "[No text detected on this page]\n"
                             
                             # Check for reversal and correct for re-verification
-                            if self._check_if_reversed(page_text_mid):
+                            if verifier.analyze_quality(page_text_mid).get('metrics', {}).get('reversed_marker_count', 0) >= 2:
                                 if verbose: print(f"   ⚠️ Detected reversed text encoding at 300 DPI. Correcting...")
                                 page_text_mid = self._reverse_text_block(page_text_mid)
                                 
@@ -169,7 +169,8 @@ class OCRPDFExtractor:
                         print(f"   ⚠️ 300 DPI fallback failed on page {page_num}: {e}")
                 
                 # 3) Final attempt: Vision OCR if still low quality and Vision is available
-                if rec_hi == "full_vision" and self.client is not None:
+                # FIX: Trigger Vision if STILL not acceptable after DPI fallback (even if score is > 0.4)
+                if rec_hi in ("dpi_fallback", "full_vision") and self.client is not None:
                     if verbose:
                         print(
                             f"   ↪ OCR still low quality after retries "
@@ -189,7 +190,7 @@ class OCRPDFExtractor:
                             vis_text, vis_conf = self._extract_page_with_vision(vis_image)
                             
                             # Vision text usually doesn't have reversal issues, but we check anyway for robustness
-                            if self._check_if_reversed(vis_text):
+                            if verifier.analyze_quality(vis_text).get('metrics', {}).get('reversed_marker_count', 0) >= 2:
                                 if verbose: print(f"   ⚠️ Detected reversed text encoding in Vision output. Correcting...")
                                 vis_text = self._reverse_text_block(vis_text)
                                 
@@ -322,10 +323,11 @@ class OCRPDFExtractor:
             if verbose:
                 print(f"Vision processing page {i}/{len(images)}...")
             
+            verifier = TextQualityVerifier()
             page_text, conf = self._extract_page_with_vision(image)
             
             if i == 1:
-                is_reversed = self._check_if_reversed(page_text)
+                is_reversed = verifier.analyze_quality(page_text).get('metrics', {}).get('reversed_marker_count', 0) >= 2
                 if is_reversed:
                     print(f"⚠️ Detected reversed text encoding in Vision OCR. Applying correction...")
 
@@ -381,22 +383,14 @@ class OCRPDFExtractor:
         return page_text, confidence
 
     def _check_if_reversed(self, text: str) -> bool:
-        """Detect if text is likely reversed (e.g. 'tropeR' instead of 'Report')."""
+        """Detect if text is likely reversed using centralized verifier."""
         if not text: return False
-        # Syncing markers for consistency
-        reversed_keywords = [
-            "tropeR", "mialC", "ycailoP", "oitaR", "ssoL", "diap",
-            "redloHyciioP", "tnebmucnI", "enO", "emaN", "rebuN", "etaD",
-            # Scrambled/Scanned rotation markers
-            "7OSS", "GZOZ", "GCOC", "Ayjuwapu|", "wield", "sisAjeuy", "eyeq", "ebeg",
-            "OQUINN", "awWeN", "JUNODDY"
-        ]
-        count = 0
-        sample = text[:10000]
-        for kw in reversed_keywords:
-            if kw in sample or kw.lower() in sample.lower():
-                count += 1
-        return count >= 2
+        try:
+            from text_quality_verifier import TextQualityVerifier
+            verifier = TextQualityVerifier()
+            return verifier.analyze_quality(text).get('metrics', {}).get('reversed_marker_count', 0) >= 2
+        except:
+            return False
 
     def _reverse_text_block(self, text: str) -> str:
         """Reverse each line of text."""

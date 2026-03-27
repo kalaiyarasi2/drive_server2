@@ -65,8 +65,8 @@ app.include_router(monitor_router)
 ```
 
 2. **Access the monitoring dashboard**:
-   - Dashboard: `http://localhost:8007/monitor/dashboard`
-   - API endpoints: `http://localhost:8007/api/monitor/*`
+   - Dashboard: `http://localhost:8008/monitor/dashboard`
+   - API endpoints: `http://localhost:8008/api/monitor/*`
 
 ## API Endpoints
 
@@ -140,7 +140,7 @@ The web-based dashboard provides a visual interface for monitoring:
 - **Progress Visualization**: Processing progress bar
 - **Error Tracking**: Failed requests and error details
 
-Access the dashboard at: `http://localhost:8007/monitor/dashboard`
+Access the dashboard at: `http://localhost:8008/monitor/dashboard`
 
 ## Database Schema
 

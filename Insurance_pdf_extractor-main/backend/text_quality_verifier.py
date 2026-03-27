@@ -25,7 +25,9 @@ class TextQualityVerifier:
             "redloHyciioP", "tnebmucnI", "enO", "emaN", "rebuN", "etaD",
             # Scrambled/Scanned rotation markers
             "7OSS", "GZOZ", "GCOC", "Ayjuwapu|", "wield", "sisAjeuy", "eyeq", "ebeg",
-            "OQUINN", "awWeN", "JUNODDY"
+            "OQUINN", "awWeN", "JUNODDY",
+            # New markers from noisy sample
+            "uonwaop", "uoniiep", "YOSBIA9S", "YOSOIAOS", "COCG", "ZOZG"
         ]
 
     def analyze_quality(self, text: str, num_pages: int = 1) -> Dict:
