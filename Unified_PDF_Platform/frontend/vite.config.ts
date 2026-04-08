@@ -13,31 +13,31 @@ export default defineConfig(({ mode }) => ({
     },
     proxy: {
       "/api": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/docs": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/openapi.json": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/redoc": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/work-comp-docs": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/cognethro": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
       "/work-comp": {
-        target: "http://localhost:8007",
+        target: "http://localhost:8008",
         changeOrigin: true,
       },
     },

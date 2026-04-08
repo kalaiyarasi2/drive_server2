@@ -150,7 +150,7 @@ async def _perform_extraction(file: UploadFile, request: Request):
             # [FIX] Ensure we have a valid host to prevent "http:///..."
             if not host or host == "localhost":
                  # Use local IP or 127.0.0.1 as last resort to be meaningful for external systems
-                 host = "10.10.8.239:8007" # Hardcoded known IP as safeguard
+                 host = "10.10.10.46:8080" # Hardcoded known IP as safeguard
             
             base_url = f"{proto}://{host}"
             print(f"[Unified][API] Using dynamic base_url: {base_url} (from {proto} and {host})")

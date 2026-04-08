@@ -1193,7 +1193,7 @@ Return JSON:
       "reopen": "True or False",
       "injury_description": "description",
       "body_part": "body part or null",
-      "injury_type": "Indemnity or Medical Only or Expense",
+      "injury_type": "Indemnity or Medical Only or Expense",  if these three or not present gives as null,
       "claim_class": "STRICTLY NUMERIC class code ONLY (e.g. 882707). NO letters. Correct OCR typos (e.g. 34p -> 340). Null if valid number is missing",
       "medical_paid": "string (e.g. '1,973.00')",
       "medical_reserve": "string",
@@ -1258,6 +1258,8 @@ Return JSON:
    **VALIDATION:**
    - If you see the SAME number appearing for multiple different employees → It's a POLICY number, NOT a claim number
    - If each employee has a DIFFERENT number → Those are CLAIM numbers ✓
+   - If "Type of Injury" field is NOT present → return null
+    DO NOT infer from claim status or financials
    
    **GOLDEN RULE:** When in doubt, look for:
    - "Claim #:", "Claim No:", "Claim Number:", "Converted #" → These introduce CLAIM numbers
@@ -1300,6 +1302,8 @@ Return JSON:
    - Medical or MED or MEDI or "Medical Only" or "Record Only" → "Medical Only"
    - Indemnity or COMP or Compensation or TTD or TPD or PPD → "Indemnity"
    - Expense or LAE or Service → "Expense"
+   - If "Type of Injury" field is NOT present → return null
+   - DO NOT infer from claim status or financials
 
 6. BODY PART
    - Extract from "Nature of Injury", "Body Part", "Part Injured" fields
@@ -1852,7 +1856,7 @@ Return a JSON object with this structure:
   "status": "Open/Closed/Reopened",
   "injury_description": "description",
   "body_part": "body part or null",
-  "injury_type": "Indemnity or Medical Only or Expense",
+  "injury_type": "Indemnity or Medical Only or Expense" ,  if these three or not present gives as null,
   "claim_class": "STRICTLY NUMERIC class code ONLY. NO letters. Correct typos. Null if missing",
   "medical_paid": "string (e.g. '1,234.56')",
   "medical_reserve": "string",

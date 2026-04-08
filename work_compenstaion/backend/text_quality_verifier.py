@@ -20,7 +20,7 @@ class TextQualityVerifier:
             'claim', 'policy', 'insured', 'date', 'amount', 'paid', 'reserve', 'total'
         ]
 
-    def analyze_quality(self, text: str, num_pages: int = 1) -> Dict:
+    def analyze_quality(self, text: str, num_pages: int = None) -> Dict:
         """
         Performs comprehensive quality analysis on extracted text.
         """
@@ -45,7 +45,7 @@ class TextQualityVerifier:
             noise_ratio = 1.0
             
         # 3. Check Completeness (average chars per page)
-        chars_per_page = len(text) / max(1, num_pages)
+        chars_per_page = len(text) / max(1, num_pages or 1)
         
         # 4. Keyword presence
         found_keywords = [k for k in self.critical_keywords if k.lower() in text.lower()]
@@ -83,9 +83,9 @@ class TextQualityVerifier:
             elif len(re.findall(r'[\|_]{3,}', line)) > 0: # Repetitive table separators
                 noisy_lines += 1
                 
-        noisy_line_ratio = noisy_lines / max(1, total_valid_lines)
+        noisy_line_ratio = noisy_lines / max(1, total_valid_lines) if total_valid_lines > 0 else 0
 
-        # Determine acceptability
+    # Determine acceptability
         reasons = []
         if cid_count > self.thresholds['max_cid_count']:
             reasons.append(f"High CID count ({cid_count})")

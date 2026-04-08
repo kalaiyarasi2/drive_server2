@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 OCR PDF Text Extractor
 Extracts text from scanned/image-based PDFs using Tesseract OCR
@@ -6,8 +6,11 @@ Converts PDF pages to images and performs optical character recognition
 """
 
 from pathlib import Path
+from io import BytesIO
+import base64
 import pytesseract
 from pdf2image import convert_from_path
+import os
 
 
 class OCRPDFExtractor:
@@ -95,9 +98,9 @@ class OCRPDFExtractor:
                     lang=language
                 )
                 page_text_hi = text_hi if text_hi.strip() else "[No text detected on this page]\n"
-                quality_hi = verifier.page_quality(page_text_hi)
-                score_hi = quality_hi.get("score", 0.0)
-                rec_hi = quality_hi.get("recommendation", "ok")
+                quality_analysis_hi = verifier.analyze_quality(page_text_hi, num_pages=1)
+                score_hi = verifier.quality_score(page_text_hi, num_pages=1)
+                rec_hi = verifier.fallback_recommendation(page_text_hi, num_pages=1)
                 
                 final_text = page_text_hi
                 extraction_method = "tesseract-ocr-600dpi"
@@ -126,9 +129,8 @@ class OCRPDFExtractor:
                                 lang=language
                             )
                             page_text_mid = text_mid if text_mid.strip() else "[No text detected on this page]\n"
-                            quality_mid = verifier.page_quality(page_text_mid)
-                            score_mid = quality_mid.get("score", 0.0)
-                            rec_mid = quality_mid.get("recommendation", "ok")
+                            score_mid = verifier.quality_score(page_text_mid, num_pages=1)
+                            rec_mid = verifier.fallback_recommendation(page_text_mid, num_pages=1)
                             
                             # Prefer the 300 DPI result if it scores better
                             if score_mid > final_score or rec_mid == "ok":
@@ -140,8 +142,6 @@ class OCRPDFExtractor:
                                 final_text = page_text_mid
                                 extraction_method = "tesseract-ocr-300dpi"
                                 final_score = score_mid
-                                quality_hi = quality_mid
-                                rec_hi = rec_mid
                     except Exception as e:
                         print(f"   ⚠️ 300 DPI fallback failed on page {page_num}: {e}")
                 
@@ -179,7 +179,7 @@ class OCRPDFExtractor:
                     "is_scanned": True,
                     "extraction_method": extraction_method,
                     "confidence": final_score,
-                    "quality_metrics": quality_hi.get("analysis", {}).get("metrics", {})
+                    "quality_metrics": quality_analysis_hi.get("metrics", {})
                 })
                 
                 extracted_text.append("\n\n")
