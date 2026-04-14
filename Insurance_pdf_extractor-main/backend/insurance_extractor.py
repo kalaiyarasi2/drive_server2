@@ -20,7 +20,9 @@ import subprocess
 import sys
 from io import BytesIO
 
-MIN_INCLUDED_CLAIM_YEAR = 2022
+# Dynamic year filter: Only include claims from the last 5 years (inclusive)
+# e.g., if 2026, include 2022, 2023, 2024, 2025, 2026
+MIN_INCLUDED_CLAIM_YEAR = datetime.now().year - 4
 
 def filter_claims_by_claim_year(
     claims: List[Dict],
@@ -902,7 +904,14 @@ DOCUMENT SAMPLE:
         # Decide whether to extract all claims or just one
         if target_claim_number:
             print(f"   Target: Claim #{target_claim_number} only")
-            return self._extract_single_claim(all_text, target_claim_number)
+            claim_data = self._extract_single_claim(all_text, target_claim_number)
+            return {
+                "claims": [claim_data] if claim_data else [],
+                "policy_number": claim_data.get("policy_number") if claim_data else None,
+                "carrier_name": claim_data.get("carrier_name") if claim_data else None,
+                "insured_name": claim_data.get("insured_name") if claim_data else None,
+                "report_date": claim_data.get("report_date") if claim_data else None,
+            }
         else:
             print(f"   Target: ALL claims in document")
             return self._extract_all_claims(all_text)
@@ -1952,7 +1961,7 @@ Return ONLY the JSON object for claim {target_claim_number}."""
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4o",
                 messages=[{
                     "role": "user",
                     "content": prompt
@@ -2220,6 +2229,11 @@ Return ONLY the JSON object for claim {target_claim_number}."""
         schema_output = {
             "claims": included_claims,
             "SummaryLevel": summary_level,
+            "claimsCount": {
+                "lastFiveYears": len(included_claims),
+                "olderThanFiveYears": len(excluded_claims),
+                "total": len(included_claims) + len(excluded_claims)
+            }
         }
         schema_file = session_dir / "extracted_schema.json"
         with open(schema_file, 'w', encoding='utf-8') as f:

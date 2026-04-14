@@ -1,39 +1,45 @@
 import sqlite3
 import json
 import threading
+import os
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-import logging
 
-import os
+# Local monitor paths for server2
+MONITOR_DIR = Path(__file__).parent
+DB_PATH = MONITOR_DIR / "requests.db"
+LOG_PATH = MONITOR_DIR.parent / "monitor.log" # Move up to root to ensure it's matched by *.log in .gitignore
 
-# Configure paths relative to the project root
-PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
-DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Ensure monitor directory exists
+if not MONITOR_DIR.exists():
+    MONITOR_DIR.mkdir(parents=True, exist_ok=True)
 
-MONITOR_LOG = DATA_DIR / "monitor.log"
-MONITOR_DB = DATA_DIR / "requests.db"
+# Configure hierarchical logging for the monitor
+monitor_logger = logging.getLogger('monitor')
+monitor_logger.setLevel(logging.INFO)
+monitor_logger.propagate = False # Prevent logs from leaking to root/watchfiles
 
-# Configure logging for the monitor
-logger = logging.getLogger('monitor_db')
-logger.setLevel(logging.INFO)
-
-# Only add handlers if they don't already exist to avoid duplication
-if not logger.handlers:
-    file_handler = logging.FileHandler(str(MONITOR_LOG))
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(file_handler)
+if not monitor_logger.handlers:
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(stream_handler)
+    # File handler
+    fh = logging.FileHandler(str(LOG_PATH))
+    fh.setFormatter(formatter)
+    monitor_logger.addHandler(fh)
+    
+    # Stream handler
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    monitor_logger.addHandler(sh)
+
+logger = logging.getLogger('monitor.db')
 
 class MonitorDatabase:
     """Database manager for request monitoring with thread-safe operations."""
     
-    def __init__(self, db_path: str = str(MONITOR_DB)):
+    def __init__(self, db_path: str = str(DB_PATH)):
         self.db_path = db_path
         self.lock = threading.Lock()
         self.init_database()
@@ -41,52 +47,54 @@ class MonitorDatabase:
     def init_database(self):
         """Initialize the database schema."""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA foreign_keys = ON")
-            cursor = conn.cursor()
-            
-            # Main requests table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS requests (
-                    id TEXT PRIMARY KEY,
-                    filename TEXT NOT NULL,
-                    file_size INTEGER,
-                    source_ip TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'pending',
-                    document_type TEXT,
-                    provider TEXT,
-                    processing_time REAL,
-                    error_details TEXT,
-                    retry_count INTEGER DEFAULT 0,
-                    output_files TEXT,  -- JSON array of output file paths
-                    metadata TEXT        -- JSON object for additional metadata
-                )
-            ''')
-            
-            # Processing steps table for detailed tracking
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS processing_steps (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    request_id TEXT,
-                    step_name TEXT NOT NULL,
-                    step_status TEXT NOT NULL,
-                    start_time DATETIME,
-                    end_time DATETIME,
-                    duration REAL,
-                    error_message TEXT,
-                    FOREIGN KEY (request_id) REFERENCES requests (id)
-                )
-            ''')
-            
-            # Indexes for performance
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_steps_request_id ON processing_steps(request_id)')
-            
-            conn.commit()
-            conn.close()
-            logger.debug("Database initialized successfully")
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                # Main requests table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS requests (
+                        id TEXT PRIMARY KEY,
+                        filename TEXT NOT NULL,
+                        file_size INTEGER,
+                        source_ip TEXT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        status TEXT DEFAULT 'pending',
+                        document_type TEXT,
+                        provider TEXT,
+                        processing_time REAL,
+                        error_details TEXT,
+                        retry_count INTEGER DEFAULT 0,
+                        output_files TEXT,  -- JSON array of output file paths
+                        metadata TEXT        -- JSON object for additional metadata
+                    )
+                ''')
+                
+                # Processing steps table for detailed tracking
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS processing_steps (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        request_id TEXT,
+                        step_name TEXT NOT NULL,
+                        step_status TEXT NOT NULL,
+                        start_time DATETIME,
+                        end_time DATETIME,
+                        duration REAL,
+                        error_message TEXT,
+                        FOREIGN KEY (request_id) REFERENCES requests (id)
+                    )
+                ''')
+                
+                # Indexes for performance
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_steps_request_id ON processing_steps(request_id)')
+                
+                conn.commit()
+                conn.close()
+                logger.info("Database initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize database: {e}")
     
     def create_request(self, request_id: str, filename: str, file_size: int, source_ip: str) -> bool:
         """Create a new request record."""
@@ -120,15 +128,15 @@ class MonitorDatabase:
                 update_fields = []
                 params = []
                 
-                if status is not None:
+                if status:
                     update_fields.append("status = ?")
                     params.append(status)
                 
-                if document_type is not None:
+                if document_type:
                     update_fields.append("document_type = ?")
                     params.append(document_type)
                 
-                if provider is not None:
+                if provider:
                     update_fields.append("provider = ?")
                     params.append(provider)
                 
@@ -136,7 +144,7 @@ class MonitorDatabase:
                     update_fields.append("processing_time = ?")
                     params.append(processing_time)
                 
-                if error_details is not None:
+                if error_details:
                     update_fields.append("error_details = ?")
                     params.append(error_details)
                 
@@ -147,7 +155,7 @@ class MonitorDatabase:
                 
                 conn.commit()
                 conn.close()
-                logger.info(f"Updated request {request_id} metadata/status")
+                logger.info(f"Updated request {request_id} status to: {status}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update request {request_id}: {e}")
@@ -210,9 +218,9 @@ class MonitorDatabase:
                 return False
     
     def update_processing_step(self, request_id: str, step_name: str, step_status: str,
-                              end_time: Optional[datetime] = None,
-                              duration: Optional[float] = None,
-                              error_message: Optional[str] = None) -> bool:
+                               end_time: Optional[datetime] = None,
+                               duration: Optional[float] = None,
+                               error_message: Optional[str] = None) -> bool:
         """Update an existing processing step."""
         with self.lock:
             try:
@@ -239,16 +247,7 @@ class MonitorDatabase:
                 
                 params.extend([request_id, step_name])
                 
-                # Update only the most recent step of this name for this request
-                query = f"""
-                    UPDATE processing_steps 
-                    SET {', '.join(update_fields)} 
-                    WHERE id = (
-                        SELECT id FROM processing_steps 
-                        WHERE request_id = ? AND step_name = ?
-                        ORDER BY start_time DESC LIMIT 1
-                    )
-                """
+                query = f"UPDATE processing_steps SET {', '.join(update_fields)} WHERE request_id = ? AND step_name = ?"
                 cursor.execute(query, params)
                 
                 conn.commit()
@@ -285,18 +284,16 @@ class MonitorDatabase:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                # Check if request exists
+                # Get existing metadata
                 cursor.execute('SELECT metadata FROM requests WHERE id = ?', (request_id,))
                 result = cursor.fetchone()
                 
-                if result is None:
-                    logger.warning(f"Attempted to add metadata to non-existent request: {request_id}")
-                    conn.close()
-                    return False
-
                 existing_metadata = {}
-                if result[0]:
-                    existing_metadata = json.loads(result[0])
+                if result and result[0]:
+                    try:
+                        existing_metadata = json.loads(result[0]) or {}
+                    except:
+                        existing_metadata = {}
                 
                 # Merge with new metadata
                 existing_metadata.update(metadata)
@@ -327,11 +324,20 @@ class MonitorDatabase:
                     columns = [description[0] for description in cursor.description]
                     request_data = dict(zip(columns, row))
                     
-                    # Parse JSON fields
+                    # Parse JSON fields with defensive fallback
                     if request_data.get('output_files'):
-                        request_data['output_files'] = json.loads(request_data['output_files'])
+                        try:
+                            request_data['output_files'] = json.loads(request_data['output_files']) or []
+                        except:
+                            request_data['output_files'] = []
+                    
                     if request_data.get('metadata'):
-                        request_data['metadata'] = json.loads(request_data['metadata'])
+                        try:
+                            request_data['metadata'] = json.loads(request_data['metadata']) or {}
+                        except:
+                            request_data['metadata'] = {}
+                    else:
+                        request_data['metadata'] = {}
                     
                     conn.close()
                     return request_data
@@ -367,11 +373,20 @@ class MonitorDatabase:
                 for row in rows:
                     request_data = dict(zip(columns, row))
                     
-                    # Parse JSON fields
+                    # Parse JSON fields with defensive fallback
                     if request_data.get('output_files'):
-                        request_data['output_files'] = json.loads(request_data['output_files'])
+                        try:
+                            request_data['output_files'] = json.loads(request_data['output_files']) or []
+                        except:
+                            request_data['output_files'] = []
+                    
                     if request_data.get('metadata'):
-                        request_data['metadata'] = json.loads(request_data['metadata'])
+                        try:
+                            request_data['metadata'] = json.loads(request_data['metadata']) or {}
+                        except:
+                            request_data['metadata'] = {}
+                    else:
+                        request_data['metadata'] = {}
                     
                     requests.append(request_data)
                 
@@ -379,6 +394,65 @@ class MonitorDatabase:
                 return requests
             except Exception as e:
                 logger.error(f"Failed to get requests: {e}")
+                return []
+ 
+    def filter_requests(self, filename: Optional[str] = None, 
+                       document_type: Optional[str] = None,
+                       limit: int = 100) -> List[Dict]:
+        """Filter requests by filename and/or document type."""
+        with self.lock:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                query = "SELECT * FROM requests"
+                where_clauses = []
+                params = []
+                
+                if filename:
+                    where_clauses.append("filename LIKE ?")
+                    params.append(f"%{filename}%")
+                
+                if document_type:
+                    where_clauses.append("document_type = ?")
+                    params.append(document_type)
+                
+                if where_clauses:
+                    query += " WHERE " + " AND ".join(where_clauses)
+                
+                query += " ORDER BY timestamp DESC LIMIT ?"
+                params.append(limit)
+                
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                
+                columns = [description[0] for description in cursor.description]
+                requests = []
+                
+                for row in rows:
+                    request_data = dict(zip(columns, row))
+                    
+                    # Parse JSON fields with defensive fallback
+                    if request_data.get('output_files'):
+                        try:
+                            request_data['output_files'] = json.loads(request_data['output_files']) or []
+                        except:
+                            request_data['output_files'] = []
+                    
+                    if request_data.get('metadata'):
+                        try:
+                            request_data['metadata'] = json.loads(request_data['metadata']) or {}
+                        except:
+                            request_data['metadata'] = {}
+                    else:
+                        request_data['metadata'] = {}
+                    
+                    requests.append(request_data)
+                
+                conn.close()
+                return requests
+            except Exception as e:
+                logger.error(f"Failed to filter requests: {e}")
                 return []
     
     def get_processing_steps(self, request_id: str) -> List[Dict]:
