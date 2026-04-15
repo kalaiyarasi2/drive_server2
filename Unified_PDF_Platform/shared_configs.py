@@ -89,7 +89,7 @@ async def _perform_extraction(file: UploadFile, request: Request):
 
         # Run the unified router (async via threadpool)
         print(f"[Unified][API] Routing document...")
-        result = await run_in_threadpool(router_engine.process, str(file_path))
+        result = await run_in_threadpool(router_engine.process, str(file_path), request_id=request_id)
 
         if "error" in result:
             print(f"[Unified][WARN] Extraction returned error: {result['error']}")

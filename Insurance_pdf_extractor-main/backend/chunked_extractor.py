@@ -343,6 +343,11 @@ class ChunkedInsuranceExtractor(EnhancedInsuranceExtractor):
         schema_output = {
             "claims": claims_only,
             "SummaryLevel": summary_level,
+            "claimsCount": {
+                "lastFiveYears": len(included_claims),
+                "olderThanFiveYears": len(excluded_claims),
+                "total": len(included_claims) + len(excluded_claims)
+            }
         }
 
         schema_file = session_dir / "extracted_schema.json"

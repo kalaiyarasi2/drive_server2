@@ -21,7 +21,9 @@ Image.MAX_IMAGE_PIXELS = None
 
 # Add project root to Python path so 'monitor' package can be imported
 import sys
-import os
+# Muffle watchfiles (reloader) logs to prevent terminal flooding and potential loops
+logging.getLogger("watchfiles").setLevel(logging.WARNING)
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)  # pdf_extractor root
 if parent_dir not in sys.path:
@@ -278,6 +280,8 @@ if __name__ == "__main__":
             "*.log", 
             "*.db", 
             "monitor/*", 
+            "pdf_extractor/monitor/*", 
+            "**/monitor/*",
             "uploads/*", 
             "unified_outputs/*",
             "frontend/dist/*"

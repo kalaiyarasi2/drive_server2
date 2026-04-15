@@ -12,6 +12,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance
+from monitor.service import request_monitor
 
 # Fix for "Decompression Bomb" error in PIL
 Image.MAX_IMAGE_PIXELS = None
@@ -211,9 +212,10 @@ def backend_context(backend_dir):
 
 class ExcelExtractor:
     """Layer 4: Direct Excel extraction without OCR."""
-    def __init__(self, output_base):
+    def __init__(self, output_base, request_id=None):
         self.output_base = output_base
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.request_id = request_id
 
     def verify_table_structure(self, columns, provider_hint=""):
         """Phase 1: Structure Understanding. AI validates if it understands the layout."""
@@ -235,10 +237,23 @@ class ExcelExtractor:
         Return a brief summary for the user logs.
         """
         try:
+            import time
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}]
             )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o"
+            )
+            
             summary = response.choices[0].message.content
             print("-" * 40)
             print(f"AI STRUCTURE LOG:\n{summary}")
@@ -313,11 +328,24 @@ CRITICAL RULES:
 """
         
         try:
+            import time
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={ "type": "json_object" }
             )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o-mini"
+            )
+            
             mapping = json.loads(response.choices[0].message.content)
             print(f"  [OK] Mapping generated: {mapping}")
             return mapping
@@ -377,11 +405,24 @@ RULES:
 - Use null for any field not found
 """
         try:
+            import time
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={ "type": "json_object" }
             )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o-mini"
+            )
+            
             meta = json.loads(response.choices[0].message.content)
             print(f"[Metadata] AI extracted: {meta}")
             return meta
@@ -400,10 +441,23 @@ RULES:
         Return ONLY the integer index of the header row. If no header is found, return -1.
         """
         try:
+            import time
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
             )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o"
+            )
+            
             idx_str = response.choices[0].message.content.strip()
             match = re.search(r'-?\d+', idx_str)
             idx = int(match.group()) if match else -1
@@ -628,6 +682,7 @@ RULES:
 class UnifiedRouter:
     def __init__(self):
         self.client = OpenAI(api_key=OPENAI_API_KEY)
+        self.request_id = None
         
         # Initialize Insurance extractor
         print("\n[STEP] Initializing Extractors...")
@@ -1196,11 +1251,24 @@ Line 1: INSURANCE_CLAIMS | WORK_COMPENSATION | INVOICE | invoice_poc_extractor |
 Line 2: Carrier/vendor name or UNKNOWN
 
 OUTPUT:"""
+                import time
+                start_time = time.time()
                 fn_response = self.client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": filename_prompt}],
                     temperature=0
                 )
+                elapsed = time.time() - start_time
+                
+                # Record AI usage
+                request_monitor.record_ai_usage(
+                    request_id=self.request_id,
+                    prompt_tokens=fn_response.usage.prompt_tokens,
+                    completion_tokens=fn_response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
+                
                 fn_output = fn_response.choices[0].message.content.strip().split("\n")
                 fn_classification = fn_output[0].strip().upper()
                 fn_provider = fn_output[1].strip().upper() if len(fn_output) > 1 else "UNKNOWN"
@@ -1272,6 +1340,8 @@ Line 2: Primary carrier, vendor, or company name (e.g., Berkshire Hathaway, Zoho
 OUTPUT:"""
 
         try:
+            import time
+            start_time = time.time()
             print("\n[AI] Sending to AI for full classification...")
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -1279,6 +1349,16 @@ OUTPUT:"""
                 temperature=0,
                 max_tokens=30,
                 timeout=30
+            )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o-mini"
             )
             output = response.choices[0].message.content.strip().split("\n")
             classification = output[0].strip().upper()
@@ -1316,6 +1396,8 @@ OUTPUT:"""
     def _identify_provider(self, filename: str, text_snippet: str) -> str:
         """Lightweight provider/carrier identification using the already-extracted snippet."""
         try:
+            import time
+            start_time = time.time()
             prov_prompt = f"""From the document filename and text below, identify the primary company name.
 This could be an insurance CARRIER (e.g., Berkshire Hathaway, Travelers, Chesapeake Employers),
 a VENDOR (e.g., Zoho, Spectra, American Public Life), or a TPA.
@@ -1333,6 +1415,17 @@ Return ONLY the company name or UNKNOWN:"""
                 messages=[{"role": "user", "content": prov_prompt}],
                 temperature=0
             )
+            elapsed = time.time() - start_time
+            
+            # Record AI usage
+            request_monitor.record_ai_usage(
+                request_id=self.request_id,
+                prompt_tokens=prov_response.usage.prompt_tokens,
+                completion_tokens=prov_response.usage.completion_tokens,
+                processing_time=elapsed,
+                model="gpt-4o-mini"
+            )
+            
             return prov_response.choices[0].message.content.strip().upper()
         except Exception as e:
             print(f"[Provider-ID] Failed: {e}")
@@ -2319,8 +2412,9 @@ Return ONLY the company name or UNKNOWN:"""
         except Exception as e:
             return False, str(e)
 
-    def process(self, file_path):
+    def process(self, file_path, request_id=None):
         """Main entry point: 7-Layer Processing Pipeline."""
+        self.request_id = request_id
         print("\n" + "="*70)
         print("[STEP] UNIFIED PDF INTELLIGENT ROUTER (7-LAYER VERSION)")
         print("="*70)
@@ -2357,7 +2451,7 @@ Return ONLY the company name or UNKNOWN:"""
         if doc_type == "INVOICE":
             # Layer 4: Format-Specific Extraction
             if file_ext in [".xlsx", ".xls", ".csv"]:
-                extractor = ExcelExtractor(output_base=OUTPUT_BASE)
+                extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
                 excel_path = extractor.process(file_path)
                 
                 if isinstance(excel_path, dict) and "error" in excel_path:
@@ -2424,7 +2518,7 @@ Return ONLY the company name or UNKNOWN:"""
         elif doc_type == "INSURANCE_CLAIMS":
             if file_ext in [".xlsx", ".xls", ".csv"]:
                 print(f"[INFO] Routing Claim Spreadsheet to Structured Extractor...")
-                extractor = ExcelExtractor(output_base=OUTPUT_BASE)
+                extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
                 excel_path = extractor.process(file_path)
 
                 if excel_path:
