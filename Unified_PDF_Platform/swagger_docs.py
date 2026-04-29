@@ -27,7 +27,19 @@ Dedicated endpoint for **Workers Compensation** documents (ACORD 130, CA, FL, an
 
 - **PDF only**: Upload a Workers Compensation PDF.
 - **Returns**: Structured JSON containing demographics, premium calculations, and rating info.
-- **Download**: `Download JSON` button will appear in the response below after extraction.
+- **Download**: `Download JSON` and `Download Excel` buttons will appear in the response below after extraction.
+"""
+
+# --- Bank Statement Documentation ---
+
+BANK_STATEMENT_SUMMARY = "Upload Bank Statement PDF - Extract Financial Data"
+
+BANK_STATEMENT_DESCRIPTION = """
+Dedicated endpoint for **Bank Statements**.
+
+- **PDF only**: Upload a bank statement PDF.
+- **Returns**: Structured JSON and Excel links containing Deposits, Credits, Checks, and Debits.
+- **Download**: Custom download buttons for both Excel and JSON will appear in the response.
 """
 
 # --- Global API Documentation ---
@@ -51,9 +63,8 @@ window.addEventListener('load', function() {
         blocks.forEach((container) => {
             const textContent = container.textContent || '';
             
-            // Check if it contains the target URLs (either absolute http or relative /api/download)
-            if (textContent.includes('"excel": "http') || textContent.includes('"json": "http') || 
-                textContent.includes('"excel": "/api/download') || textContent.includes('"json": "/api/download')) {
+            // Check if it contains the target URLs
+            if (textContent.includes('"excel": "http') || textContent.includes('"json": "http')) {
                 // Always attach to the parent element
                 const targetElement = container.parentElement;
                 
@@ -67,7 +78,7 @@ window.addEventListener('load', function() {
                         btnContainer.className = 'cognethro-dl-btns';
                         btnContainer.style = 'margin-top: 20px; display: flex; gap: 12px; padding: 15px; background: #111; border-radius: 10px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5);';
                         
-                        if (data.excel && data.trigger_point !== "work-comp") {
+                        if (data.excel) {
                             const xlBtn = document.createElement('a');
                             xlBtn.href = data.excel;
                             xlBtn.innerHTML = '⚡  <b>Download Excel</b>';
@@ -116,8 +127,7 @@ window.addEventListener('load', function() {
         blocks.forEach((container) => {
             const textContent = container.textContent || '';
             
-            if (textContent.includes('"json": "http') || textContent.includes('"excel": "http') ||
-                textContent.includes('"json": "/api/download') || textContent.includes('"excel": "/api/download')) {
+            if (textContent.includes('"json": "http') || textContent.includes('"excel": "http')) {
                 // Always attach to the parent element
                 const targetElement = container.parentElement;
                 
@@ -131,7 +141,7 @@ window.addEventListener('load', function() {
                         btnContainer.className = 'wc-dl-btns';
                         btnContainer.style = 'margin-top: 20px; display: flex; gap: 12px; padding: 15px; background: #111; border-radius: 10px; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5);';
                         
-                        if (data.excel && data.trigger_point !== "work-comp") {
+                        if (data.excel) {
                             const xlBtn = document.createElement('a');
                             xlBtn.href = data.excel;
                             xlBtn.innerHTML = '⚡  <b>Download Excel</b>';

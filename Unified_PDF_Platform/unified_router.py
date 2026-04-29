@@ -1,4 +1,3 @@
-
 import os
 import sys
 import subprocess
@@ -7,11 +6,13 @@ import re
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from typing import List, Dict, Optional, Any, Union
 import pandas as pd
 from openai import OpenAI
 from dotenv import load_dotenv
 import fitz  # PyMuPDF
 from PIL import Image, ImageEnhance
+import time
 from monitor.service import request_monitor
 
 # Fix for "Decompression Bomb" error in PIL
@@ -55,9 +56,10 @@ INSURANCE_BACKEND_DIR = BASE_DIR.parent / "Insurance_pdf_extractor-main/backend"
 INVOICE_BACKEND_DIR = BASE_DIR.parent / "Invoice_pdf_extractor/Invoice_Extraction-main"
 GENERAL_INVOICE_BACKEND_DIR = BASE_DIR.parent / "invoice/backend"
 WORK_COMPENSATION_BACKEND_DIR = BASE_DIR.parent / "work_compenstaion/backend"
+BANK_STATEMENT_BACKEND_DIR = BASE_DIR.parent / "bank statement/backend"
 
 # Add backend dirs to sys.path early to allow module imports
-for d in [INSURANCE_BACKEND_DIR, WORK_COMPENSATION_BACKEND_DIR, GENERAL_INVOICE_BACKEND_DIR, INVOICE_BACKEND_DIR]:
+for d in [INSURANCE_BACKEND_DIR, WORK_COMPENSATION_BACKEND_DIR, GENERAL_INVOICE_BACKEND_DIR, INVOICE_BACKEND_DIR, BANK_STATEMENT_BACKEND_DIR]:
     if d.exists() and str(d) not in sys.path:
         sys.path.append(str(d))
 
@@ -77,26 +79,23 @@ if POPPLER_PATH and os.path.exists(POPPLER_PATH):
 else:
     print("Warning: POPPLER_PATH not set or invalid. OCR may not work for scanned PDFs.")
 
-# Configure Tesseract PATH
-TESSERACT_PATH = os.getenv("TESSERACT_PATH")
-if TESSERACT_PATH and os.path.exists(TESSERACT_PATH):
-    os.environ["PATH"] = TESSERACT_PATH + os.pathsep + os.environ.get("PATH", "")
-    if hasattr(pytesseract, 'pytesseract'):
-        pytesseract.pytesseract.tesseract_cmd = os.path.join(TESSERACT_PATH, "tesseract.exe")
-    print(f"[OK] Tesseract PATH configured: {TESSERACT_PATH}")
-else:
-    print("Warning: TESSERACT_PATH not set or invalid. OCR recovery may fail.")
+BASE_DIR = Path(__file__).parent
+INSURANCE_BACKEND_DIR = BASE_DIR.parent / "Insurance_pdf_extractor-main/backend"
+INVOICE_BACKEND_DIR = BASE_DIR.parent / "Invoice_pdf_extractor/Invoice_Extraction-main"
+GENERAL_INVOICE_BACKEND_DIR = BASE_DIR.parent / "invoice/backend"
+WORK_COMPENSATION_BACKEND_DIR = BASE_DIR.parent / "work_compenstaion/backend"
+BANK_STATEMENT_BACKEND_DIR = BASE_DIR.parent / "bank statement/backend"
 
-
-# Import Insurance extractor as module
+# Import Insurance extractor dynamically
+INSURANCE_MODULE_AVAILABLE = False
 try:
-    from chunked_extractor import ChunkedInsuranceExtractor
-    INSURANCE_MODULE_AVAILABLE = True
-    print("[OK] Insurance extractor module loaded successfully")
+    # First check if we can load it dynamically (most robust)
+    InsuranceClass = get_extractor_class(INSURANCE_BACKEND_DIR)
+    if InsuranceClass:
+        INSURANCE_MODULE_AVAILABLE = True
+        # print("[OK] Insurance extractor module loaded successfully")
 except Exception as e:
-    INSURANCE_MODULE_AVAILABLE = False
-    print(f"Warning: Could not import Insurance extractor module: {e}")
-    # print(f"   (Search path: {sys.path[:3]}...)")
+    print(f"Warning: Could not check Insurance extractor module: {e}")
     print("   Will fall back to subprocess method if needed.")
 
 # Configuration for paths
@@ -224,10 +223,10 @@ class ExcelExtractor:
         prompt = f"""Analyze these spreadsheet columns from carrier '{provider_hint}'.
         COLUMNS: {columns}
         
-        Required Schema (14 fields):
-        INV_DATE, INV_NUMBER, BILLING_PERIOD, LASTNAME, FIRSTNAME, MIDDLENAME, SSN, 
-        POLICYID, MEMBERID, PLAN_NAME, PLAN_TYPE, COVERAGE, CURRENT_PREMIUM, 
-        ADJUSTMENT_PREMIUM
+        Required Schema (15 fields):
+        SOURCE_FILE, INV_DATE, INV_NUMBER, BILLING_PERIOD, LASTNAME, FIRSTNAME, 
+        MIDDLENAME, SSN, POLICYID, MEMBERID, PLAN_NAME, PLAN_TYPE, COVERAGE, 
+        CURRENT_PREMIUM, ADJUSTMENT_PREMIUM
         
         TASK:
         Describe how these source columns map to the required schema. 
@@ -237,23 +236,20 @@ class ExcelExtractor:
         Return a brief summary for the user logs.
         """
         try:
-            import time
             start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}]
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o"
-            )
-            
+            if self.request_id:
+                request_monitor.record_ai_usage(
+                    request_id=self.request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o"
+                )
             summary = response.choices[0].message.content
             print("-" * 40)
             print(f"AI STRUCTURE LOG:\n{summary}")
@@ -328,7 +324,6 @@ CRITICAL RULES:
 """
         
         try:
-            import time
             start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -336,16 +331,14 @@ CRITICAL RULES:
                 response_format={ "type": "json_object" }
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o-mini"
-            )
-            
+            if self.request_id:
+                request_monitor.record_ai_usage(
+                    request_id=self.request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
             mapping = json.loads(response.choices[0].message.content)
             print(f"  [OK] Mapping generated: {mapping}")
             return mapping
@@ -405,7 +398,6 @@ RULES:
 - Use null for any field not found
 """
         try:
-            import time
             start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -413,16 +405,14 @@ RULES:
                 response_format={ "type": "json_object" }
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o-mini"
-            )
-            
+            if self.request_id:
+                request_monitor.record_ai_usage(
+                    request_id=self.request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
             meta = json.loads(response.choices[0].message.content)
             print(f"[Metadata] AI extracted: {meta}")
             return meta
@@ -441,23 +431,20 @@ RULES:
         Return ONLY the integer index of the header row. If no header is found, return -1.
         """
         try:
-            import time
             start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o"
-            )
-            
+            if self.request_id:
+                request_monitor.record_ai_usage(
+                    request_id=self.request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o"
+                )
             idx_str = response.choices[0].message.content.strip()
             match = re.search(r'-?\d+', idx_str)
             idx = int(match.group()) if match else -1
@@ -682,7 +669,6 @@ RULES:
 class UnifiedRouter:
     def __init__(self):
         self.client = OpenAI(api_key=OPENAI_API_KEY)
-        self.request_id = None
         
         # Initialize Insurance extractor
         print("\n[STEP] Initializing Extractors...")
@@ -718,6 +704,36 @@ class UnifiedRouter:
             print("[ERR] Work Compensation Extractor class not found")
             self.work_comp_extractor = None
 
+        # Initialize Bank Statement extractor
+        print("[STEP] Initializing Bank Statement Extractor...")
+        StatementClass = self._get_bank_extractor_class(BANK_STATEMENT_BACKEND_DIR)
+        if StatementClass:
+            try:
+                self.bank_extractor = StatementClass(
+                    output_dir=str(BANK_STATEMENT_BACKEND_DIR / "outputs")
+                )
+                print("[OK] Bank Statement Extractor initialized")
+            except Exception as e:
+                print(f"[ERR] Failed to init Bank Statement Extractor: {e}")
+                self.bank_extractor = None
+        else:
+            print("[ERR] Bank Statement Extractor class not found")
+            self.bank_extractor = None
+
+    def _get_bank_extractor_class(self, backend_dir):
+        """Dynamic loader for StatementExtractor."""
+        import importlib.util
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "statement_extractor", backend_dir / "statement_extractor.py"
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.StatementExtractor
+        except Exception as e:
+            print(f"[Extractor] Error loading bank extractor: {e}")
+            return None
+
     def _check_if_reversed(self, text: str) -> bool:
         """Detect PDFs with 180°-rotated text where each line is stored reversed.
         Common reversed markers: 'tropeR'=Report, 'ssoL'=Loss, 'diap'=paid, 'mialC'=Claim.
@@ -727,10 +743,7 @@ class UnifiedRouter:
             return False
         reversed_markers = [
             "tropeR", "mialC", "ycailoP", "ssoL", "diap", "ecnarusnI", "noitazilitu",
-            "eciovni", "arboC", "egarevoC", "namuH", "atneD", "noisiV", "gnilliB",
-            # Scrambled/Scanned rotation markers
-            "7OSS", "GZOZ", "GCOC", "Ayjuwapu|", "wield", "sisAjeuy", "eyeq", "ebeg",
-            "OQUINN", "awWeN", "JUNODDY"
+            "eciovni", "arboC", "egarevoC", "namuH", "atneD", "noisiV", "gnilliB"
         ]
         hits = sum(1 for m in reversed_markers if m in text or m.lower() in text.lower())
         return hits >= 2
@@ -778,7 +791,9 @@ class UnifiedRouter:
         if noise_ratio > 0.08:
             words = re.findall(r'[a-zA-Z]{3,}', text)
             word_density = len(words) / max(total / 5, 1)
-            if word_density < 0.4:
+            # DENSE TABLES (like Humana, Mountain Star) have lots of numbers/IDs, lowering word density.
+            # 0.20 is a safer floor than 0.40.
+            if word_density < 0.20:
                 print(f"[Noise] Semi-scanned noise: noise={noise_ratio:.2%}, word_density={word_density:.2f}")
                 return True
 
@@ -791,48 +806,38 @@ class UnifiedRouter:
         return False
 
     def _detect_rotation_and_fix(self, pdf_path: str, tmp_dir: str) -> str:
-        """Detect and auto-fix page rotation for ALL 4 angles (0/90/180/270).
-        
-        Strategy:
-          1. Read fitz page.rotation metadata (embedded in PDF header) — most reliable.
-          2. If no metadata rotation, use block geometry heuristic (tall vs wide blocks).
-          3. Always save a normalized copy so pdfplumber can read the corrected text layer.
-        """
+        """Detect and auto-fix page rotation for ALL 4 angles (0/90/180/270)."""
         try:
+            import fitz
             doc = fitz.open(pdf_path)
             rotated_any = False
             for i in range(len(doc)):
                 page = doc[i]
                 
-                # Method 1: Trust the PDF rotation metadata (most accurate)
-                meta_rotation = page.rotation   # returns 0, 90, 180, or 270
+                # Trust existing metadata rotation if present
+                meta_rotation = page.rotation
                 if meta_rotation != 0:
-                    # Counteract the stored rotation so rendered text is upright
-                    correction = (360 - meta_rotation) % 360
-                    page.set_rotation(correction)
-                    rotated_any = True
-                    print(f"[Rotation] Page {i+1}: metadata rotation={meta_rotation} -> corrected by {correction} deg")
                     continue
 
-                # Method 2: Block geometry heuristic (for PDFs with no rotation metadata)
+                # Content heuristic for scanned documents with no rotation metadata
                 blocks = page.get_text("blocks")
                 if not blocks:
                     continue
+                # If blocks are significantly taller than wide, document is likely sideways
+                # Threshold of 8 blocks ensures we don't accidentally rotate charts/logos
                 vertical = sum(1 for b in blocks if abs(b[3]-b[1]) > abs(b[2]-b[0]) * 1.5)
                 horizontal = sum(1 for b in blocks if abs(b[2]-b[0]) >= abs(b[3]-b[1]))
-                if vertical > horizontal and vertical > 2:
+                if vertical > horizontal and vertical > 8:
                     page.set_rotation(90)
                     rotated_any = True
                     print(f"[Rotation] Page {i+1}: geometry heuristic -> corrected 90 deg")
 
-            rotated_path = os.path.join(tmp_dir, "rotated_snippet.pdf")
-            doc.save(rotated_path)
+            normalized_path = os.path.join(tmp_dir, "normalized_rotation.pdf")
+            doc.save(normalized_path)
             doc.close()
             if rotated_any:
-                print(f"[Rotation] Rotation corrected -> {rotated_path}")
-            else:
-                print(f"[Rotation] No rotation needed - using fitz-normalized copy")
-            return rotated_path
+                print(f"[Rotation] Normalization applied -> {normalized_path}")
+            return normalized_path
         except Exception as e:
             print(f"[Rotation] Rotation check failed: {e}")
         return pdf_path
@@ -1023,6 +1028,11 @@ class UnifiedRouter:
         filename_lower = filename.lower()
         text_lower = (text_snippet or "").lower()
 
+        # ── HIGH PRIORITY DETERMINISTIC RULES ─────────────────────────────────
+        if "legal shield" in filename_lower or "legalshield" in filename_lower:
+            print("[Pre-Classify] Legal Shield detected via filename → INVOICE")
+            return "INVOICE", "Legal Shield priority keyword"
+
         # ── FILENAME RULES (deterministic, no content needed) ─────────────────
 
         # RULE F1: ACORD keyword in filename → Workers Comp application
@@ -1040,10 +1050,10 @@ class UnifiedRouter:
             return "INSURANCE_CLAIMS", "Filename loss run keyword"
 
         # RULE F3: Explicit insurance billing keywords in filename
-        insurance_fn_kw = ["medlink", "medsupp", "cobra", "group benefit", "beneficiary", "uhc", "unitedhealthcare", "bcbs", "bluecross", "blueshield", "anthem", "humana", "aetna", "cigna"]
+        insurance_fn_kw = ["medlink", "medsupp", "cobra", "group benefit", "beneficiary", "uhc", "unitedhealthcare", "bcbs", "bluecross", "blueshield", "anthem", "humana", "aetna", "cigna", "angle", "angle health", "principal"]
         if any(kw in filename_lower for kw in insurance_fn_kw):
-            # If it's an insurance carrier keyword and ALSO contains an invoice keyword, it's very likely an INVOICE
-            if any(ik in filename_lower for ik in ["inv", "invoice", "bill", "billing"]):
+            # If it's an insurance carrier keyword and ALSO contains an invoice keyword (including dollar signs), it's very likely an INVOICE
+            if any(ik in filename_lower for ik in ["inv", "invoice", "bill", "billing", "benefit", "master", "$", "premium"]):
                 print(f"[Pre-Classify] Insurance carrier + Invoice keyword in filename → INVOICE")
                 return "INVOICE", "Filename insurance + invoice keyword"
             
@@ -1051,7 +1061,19 @@ class UnifiedRouter:
             # but we usually prefer sticking to INVOICE if it's not explicitly a loss run.
             # However, for now, let's just make sure "Anthem...Inv" works.
         
-        # RULE F4: Explicit vendor invoice keywords in filename
+        # RULE F4: Bank statement filenames (common bank names + account/statement keywords)
+        bank_fn_kw = [
+            "chase.com", "chase bank", "bank of america", "wells fargo", "citibank",
+            "capital one", "pnc bank", "td bank", "us bank", "usbank",
+            "regions bank", "truist", "fifth third", "key bank", "keybank",
+            "huntington bank", "bank statement", "bankstatement",
+            "checking statement", "savings statement", "operating account"
+        ]
+        if any(kw in filename_lower for kw in bank_fn_kw):
+            print(f"[Pre-Classify] Bank statement filename → BANK_STATEMENT")
+            return "BANK_STATEMENT", "Filename bank keyword"
+
+        # RULE F5: Explicit vendor invoice keywords in filename
         vendor_fn_kw = ["internet", "subscription", "utility", "phone bill", "electricity"]
         if any(kw in filename_lower for kw in vendor_fn_kw):
             print("[Pre-Classify] Vendor invoice filename → invoice_poc_extractor")
@@ -1061,21 +1083,24 @@ class UnifiedRouter:
         if not text_lower:
             return None, None   # No text available → defer to LLM
 
-        # RULE C1: ACORD form content signals → Work Comp
-        acord_content_signals = [
-            "workers compensation application",
-            "acord 130", "acord 133",
-            "rating by state", "class code",
-            "total estimated annual premium",
-            "employers liability",
-            "payroll", "experience modification",
+        # Pre-calculate hits for cross-rule shielding
+        
+        # Insurance premium billing invoice (carrier billing members)
+        premium_billing_signals = [
+            "medlink", "group med sup", "group medical supplement",
+            "amount billed", "premium period",
+            "medsupp", "cobra",
+            "benefit billing", "enrollment bill",
+            "american public life", "apl",
+            "member premium", "subscriber premium",
+            "unitedhealthcare", "uhc", "bluecross", "blueshield", "bcbs", "humana", "aetna", "cigna", "angle", "angle health",
+            "legal shield", "legalshield",
+            "policy no.", "subscriber id", "member id",
+            "benefit invoice", "premium statement", "billing summary", "billing statement", "premium amount"
         ]
-        acord_hits = sum(1 for kw in acord_content_signals if kw in text_lower)
-        if acord_hits >= 3:
-            print(f"[Pre-Classify] ACORD content signals ({acord_hits} hits) → WORK_COMPENSATION")
-            return "WORK_COMPENSATION", f"ACORD content signals ({acord_hits} matches)"
+        premium_hits = sum(1 for kw in premium_billing_signals if kw in text_lower)
 
-        # RULE C2: WC Loss Run / Claims content (very specific combination)
+        # WC Loss Run / Claims content
         loss_run_content_signals = [
             "loss run", "wc loss run",
             "policy summary",
@@ -1087,73 +1112,100 @@ class UnifiedRouter:
             "claim number", "claim status",
         ]
         loss_hits = sum(1 for kw in loss_run_content_signals if kw in text_lower)
+
+        # ACORD form content signals
+        acord_content_signals = [
+            "workers compensation application",
+            "acord 130", "acord 133",
+            "rating by state", "class code",
+            "total estimated annual premium",
+            "employers liability",
+            "payroll", "experience modification",
+        ]
+        acord_hits = sum(1 for kw in acord_content_signals if kw in text_lower)
+
+        # ── HIGH PRIORITY INSURANCE CONTENT RULES (checked before Bank Statements) ─────────────────
+        
+        # RULE C1: ACORD signals → Work Comp
+        if acord_hits >= 3:
+            print(f"[Pre-Classify] ACORD content signals ({acord_hits} hits) → WORK_COMPENSATION")
+            return "WORK_COMPENSATION", f"ACORD content signals ({acord_hits} matches)"
+
+        # RULE C2: WC Loss Run signals → Claims
         if loss_hits >= 4:
             print(f"[Pre-Classify] WC Loss Run content signals ({loss_hits} hits) → INSURANCE_CLAIMS")
             return "INSURANCE_CLAIMS", f"Loss run content signals ({loss_hits} matches)"
 
-        # RULE C3: Insurance premium billing invoice (carrier billing members)
-        premium_billing_signals = [
-            "medlink", "group med sup", "group medical supplement",
-            "amount billed", "premium period",
-            "medsupp", "cobra",
-            "benefit billing", "enrollment bill",
-            "american public life", "apl",
-            "member premium", "subscriber premium",
-            "unitedhealthcare", "uhc", "bluecross", "blueshield", "bcbs", "humana", "aetna", "cigna",
-            "policy no.", "subscriber id", "member id",
-            "benefit invoice", "premium statement", "billing summary"
-        ]
-        premium_hits = sum(1 for kw in premium_billing_signals if kw in text_lower)
+        # RULE C3: Insurance Invoice signals → INVOICE
         if premium_hits >= 2:
             print(f"[Pre-Classify] Premium billing signals ({premium_hits} hits) → INVOICE")
             return "INVOICE", f"Premium billing content signals ({premium_hits} matches)"
 
-        # RULE C4: Vendor / SaaS / utility invoice (GST, subscription, utility, common invoice headers)
+        # ── SECONDARY CONTENT RULES ──────────────────────────────────────────
+
+        # RULE C0: BANK STATEMENT (Weighted unique keyword scoring)
+        # Bank statements often share keywords like "Account Summary" or "Statement Period" with insurance/vendor docs.
+        # We use a higher threshold (shielding) if insurance signals are present.
+        bank_signals = {
+            "account summary": 3,
+            "beginning balance": 3,
+            "ending balance": 3,
+            "routing number": 3,
+            "deposits and other credits": 3,
+            "checks and other debits": 3,
+            "daily balance summary": 3,
+            "statement period": 3,
+            "transaction date": 1,
+            "withdrawal": 1,
+            "deposit": 1,
+            "checking account": 1,
+            "savings account": 1,
+            "overdraft": 1,
+            "item description": 1,
+            "account number": 1,
+        }
+        
+        bank_score = 0
+        matched_bank_keywords = []
+        for kw, weight in bank_signals.items():
+            if kw in text_lower:
+                bank_score += weight
+                matched_bank_keywords.append(kw)
+        
+        # [SHIELDING] Require a higher score if there was at least 1 insurance/claims hit
+        bank_threshold = 10 if (premium_hits > 0 or loss_hits > 0) else 5
+        
+        if bank_score >= bank_threshold:
+            print(f"[Pre-Classify] BANK STATEMENT score {bank_score} (Threshold: {bank_threshold}, Matches: {matched_bank_keywords})")
+            return "BANK_STATEMENT", f"Bank scoring threshold met ({bank_score})"
+
+        # RULE C4: Vendor / SaaS / utility invoice
         invoice_poc_extractor_signals = [
-            "tax invoice",
-            "gstin", "gst number",
-            "cgst", "sgst",           # Indian GST split
-            "irn:",                    # Indian e-invoice reference
-            "hsn code", "sac:",        # Indian tax codes
+            "tax invoice", "gstin", "gst number", "cgst", "sgst", "irn:", "hsn code", "sac:",
             "zoho", "spectra", "quickbooks", "freshbooks", "stripe", "razorpay",
-            "recurring charges",
-            "amount payable",
-            "due date", "date due",
-            "unit price", "unit cost",
-            "qty", "quantity",
-            "description",
-            "subtotal",
-            "bill to", "ship to",
-            "bandwidth", "internet access", "mbps",   # telecom / ISP bills
-            "software license", "subscription",
-            "balance due",
-            "avanquest", "pdfescape", "software",
+            "recurring charges", "amount payable", "due date", "date due",
+            "unit price", "unit cost", "qty", "quantity", "description", "subtotal",
+            "bill to", "ship to", "bandwidth", "internet access", "mbps",
+            "software license", "subscription", "balance due", "avanquest", "pdfescape", "software",
         ]
         vendor_hits = sum(1 for kw in invoice_poc_extractor_signals if kw in text_lower)
         if vendor_hits >= 3:
-            # Shielding: If it looks like an insurance invoice (premium hits > 0), require more vendor signals
-            # Increase threshold to 5 if any premium signals found, to prevent misrouting insurance docs.
             vendor_threshold = 5 if premium_hits > 0 else 3
             if vendor_hits >= vendor_threshold:
                 print(f"[Pre-Classify] Vendor invoice content signals ({vendor_hits} hits) → invoice_poc_extractor")
                 return "invoice_poc_extractor", f"Vendor invoice content signals ({vendor_hits} matches)"
 
         # RULE C5: Identification documents
-        id_signals = [
-            "passport", "driver's license", "driver license",
-            "date of birth", "expiration date",
-            "ssn", "social security",
-            "state of", "license number",
-            "id number", "identification",
-        ]
+        id_signals = ["passport", "driver's license", "driver license", "date of birth", "expiration date", "ssn", "social security", "state of", "license number", "id number", "identification"]
         id_hits = sum(1 for kw in id_signals if kw in text_lower)
         if id_hits >= 3:
             print(f"[Pre-Classify] ID document signals ({id_hits} hits) → IDENTIFICATION")
             return "IDENTIFICATION", f"ID content signals ({id_hits} matches)"
 
+
         return None, None
 
-    def classify_document(self, pdf_path):
+    def classify_document(self, file_path, request_id=None):
         """Layer 1 & 2: Classify type and identify provider.
 
         Accuracy-first redesign:
@@ -1167,19 +1219,20 @@ class UnifiedRouter:
         print("[STEP 1] INTELLIGENT DOCUMENT CLASSIFICATION & PROVIDER DETECTION")
         print("="*70)
 
-        filename = Path(pdf_path).name
-        file_ext = Path(pdf_path).suffix.lower()
+        file_path = Path(file_path)
+        filename = file_path.name
+        file_ext = file_path.suffix.lower()
         print(f"[FILE] Processing: {filename} ({file_ext})")
 
         # ── STEP 0: Extract raw text from any format FIRST ────────────────────
         text = ""
         if file_ext == ".pdf":
             print("\n[STEP] Extracting text snippet for classification...")
-            text = self.extract_snippet(pdf_path)
+            text = self.extract_snippet(file_path)
         elif file_ext in [".xlsx", ".xls"]:
             print("\n[STEP] Extracting Excel metadata for classification...")
             try:
-                xl = pd.ExcelFile(pdf_path)
+                xl = pd.ExcelFile(file_path)
                 hint_parts = []
                 for sheet_name in xl.sheet_names[:3]:
                     df = pd.read_excel(xl, sheet_name=sheet_name, nrows=20, header=None)
@@ -1194,8 +1247,8 @@ class UnifiedRouter:
         elif file_ext == ".csv":
             print("\n[STEP] Extracting CSV metadata for classification...")
             try:
-                # Use names=list(range(500)) to handle variable column counts (same as ExcelExtractor)
-                df = pd.read_csv(pdf_path, nrows=20, header=None, engine='python', on_bad_lines='skip', names=list(range(500)), encoding='latin-1')
+                # Use names=list(range(500)) to handle variable column counts
+                df = pd.read_csv(file_path, nrows=20, header=None, engine='python', on_bad_lines='skip', names=list(range(500)), encoding='latin-1')
                 all_values = df.astype(str).values.flatten()
                 text = " ".join([v for v in all_values if v.lower() not in ["nan", "none", ""]][:200])
                 text = text or "CSV file appears to be empty"
@@ -1208,7 +1261,7 @@ class UnifiedRouter:
         if pre_type:
             print(f"[Pre-Classify] Deterministic rule fired → {pre_type} ({pre_reason})")
             # Still run provider ID (cheap, uses already-extracted text)
-            provider = self._identify_provider(filename, text[:2000])
+            provider = self._identify_provider(filename, text[:2000], request_id=request_id)
             print(f"\n[INFO] Classification Result: {pre_type} | Provider: {provider}")
             return pre_type, provider
 
@@ -1217,7 +1270,9 @@ class UnifiedRouter:
         meaningful_keywords = [
             "compensation", "insurance", "invoice", "premium", "claim", "policy",
             "payroll", "employee", "acord", "member", "billing", "workers",
-            "gstin", "cgst", "sgst", "loss run", "claimant", "subscription"
+            "gstin", "cgst", "sgst", "loss run", "claimant", "subscription",
+            "balance", "account", "deposit", "withdrawal", "statement",
+            "checking", "savings", "routing number", "transaction", "benefit", "medical", "enrollment"
         ]
         has_meaningful_content = any(kw in text.lower() for kw in meaningful_keywords)
         is_noisy = file_ext == ".pdf" and (not text or clean_text_len < 50 or not has_meaningful_content)
@@ -1240,35 +1295,37 @@ CRITICAL RULES (apply in order, first match wins):
    NOTE: "Workers Compensation Loss Run" is INSURANCE_CLAIMS, NOT WORK_COMPENSATION.
 2. "Acord", "WC App", "Workers Comp Application" in filename -> WORK_COMPENSATION
 3. "Invoice", "Inv", "Bill", "Billing", "Statement" in filename -> INVOICE
-   NOTE: Even if an insurance carrier name (like Anthem) is present, if "Inv" or "Invoice" is also there, pick INVOICE.
-4. "Passport", "Driver License", "ID Card", "SSN" in filename -> IDENTIFICATION
-5. Any insurance CARRIER or TPA name (Accident Fund, CCMSI, BerkleyNet, KeyRisk, Travelers,
+4. "Account", "chase.com", "Chase Bank", "Bank of America", "Wells Fargo", "Citibank",
+   "Operating Account", "Checking", "Savings" combined with bank/financial context -> BANK_STATEMENT
+   NOTE: "Operating Account" or any bank name (Chase, Wells Fargo, etc.) -> BANK_STATEMENT, NOT INVOICE.
+5. "Invoice", "Inv", "Bill", "Billing", "Benefit", "Legal Shield", "Master" in filename -> INVOICE
+   NOTE: Even if an insurance carrier name (like Anthem or Legal Shield) is present, if "Inv", "Invoice", or "Benefit" is also there, pick INVOICE.
+6. "Passport", "Driver License", "ID Card", "SSN" in filename -> IDENTIFICATION
+7. Any insurance CARRIER or TPA name (Accident Fund, CCMSI, BerkleyNet, KeyRisk, Travelers,
    Zurich, CNA, AmTrust, Liberty Mutual, Markel, Stonetrust, FCBI, State Fund, Clear Springs,
-   Chesapeake Employers, Berkshire Hathaway) paired with no invoice keywords -> INSURANCE_CLAIMS
+   Chesapeake Employers, Berkshire Hathaway) paired with no invoice or benefit keywords -> INSURANCE_CLAIMS
 
 Return EXACTLY TWO lines:
-Line 1: INSURANCE_CLAIMS | WORK_COMPENSATION | INVOICE | invoice_poc_extractor | IDENTIFICATION
+Line 1: INSURANCE_CLAIMS | WORK_COMPENSATION | INVOICE | invoice_poc_extractor | IDENTIFICATION | BANK_STATEMENT
 Line 2: Carrier/vendor name or UNKNOWN
 
 OUTPUT:"""
-                import time
-                start_time = time.time()
+                start_time_fn = time.time()
                 fn_response = self.client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": filename_prompt}],
                     temperature=0
                 )
-                elapsed = time.time() - start_time
-                
-                # Record AI usage
-                request_monitor.record_ai_usage(
-                    request_id=self.request_id,
-                    prompt_tokens=fn_response.usage.prompt_tokens,
-                    completion_tokens=fn_response.usage.completion_tokens,
-                    processing_time=elapsed,
-                    model="gpt-4o-mini"
-                )
-                
+                elapsed_fn = time.time() - start_time_fn
+                if request_id and request_monitor:
+                    request_monitor.record_ai_usage(
+                        request_id=request_id,
+                        prompt_tokens=fn_response.usage.prompt_tokens,
+                        completion_tokens=fn_response.usage.completion_tokens,
+                        processing_time=elapsed_fn,
+                        model="gpt-4o-mini"
+                    )
+                    
                 fn_output = fn_response.choices[0].message.content.strip().split("\n")
                 fn_classification = fn_output[0].strip().upper()
                 fn_provider = fn_output[1].strip().upper() if len(fn_output) > 1 else "UNKNOWN"
@@ -1322,16 +1379,22 @@ IDENTIFICATION
   -> Government-issued ID documents: Passport, Driver License, SSN Card, State ID.
   -> Key signals: date of birth, expiration date, document number, photo ID indicators.
 
+BANK_STATEMENT
+  -> Monthly bank or financial statements.
+  -> Key signals: Account Summary, Beginning/Ending Balance, Routing Number, 
+     Deposits, Withdrawals, Checking/Savings Account.
+
 ======================================================
 PRIORITY TIEBREAKER RULES:
 ======================================================
+- "Account Summary" + "Balance" -> BANK_STATEMENT (Only if NO insurance carrier or benefit keywords present)
 - "Loss Run" keyword ALWAYS -> INSURANCE_CLAIMS (overrides WC context)
 - "Amount Billed / Amount Due / Premium Period" -> INVOICE (even if carrier name present)
 - ACORD 130/133 form -> WORK_COMPENSATION
 - Claimant + date of loss + incurred amounts -> INSURANCE_CLAIMS
 
 Return EXACTLY TWO lines:
-Line 1: INSURANCE_CLAIMS | WORK_COMPENSATION | BENEFIT_INVOICE | VENDOR_INVOICE | IDENTIFICATION
+Line 1: INSURANCE_CLAIMS | WORK_COMPENSATION | BENEFIT_INVOICE | VENDOR_INVOICE | IDENTIFICATION | BANK_STATEMENT
 Line 2: Primary carrier, vendor, or company name (e.g., Berkshire Hathaway, Zoho, APL) or UNKNOWN
 
 - USE VENDOR_INVOICE for software (Avanquest, Zoho, Adobe), utilities, and SaaS.
@@ -1340,9 +1403,8 @@ Line 2: Primary carrier, vendor, or company name (e.g., Berkshire Hathaway, Zoho
 OUTPUT:"""
 
         try:
-            import time
-            start_time = time.time()
             print("\n[AI] Sending to AI for full classification...")
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
@@ -1351,15 +1413,14 @@ OUTPUT:"""
                 timeout=30
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o-mini"
-            )
+            if request_id and request_monitor:
+                request_monitor.record_ai_usage(
+                    request_id=request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
             output = response.choices[0].message.content.strip().split("\n")
             classification = output[0].strip().upper()
             provider = output[1].strip().upper() if len(output) > 1 else "UNKNOWN"
@@ -1387,16 +1448,17 @@ OUTPUT:"""
             return "WORK_COMPENSATION"
         if "IDENTIFICATION" in raw:
             return "IDENTIFICATION"
+        if "BANK_STATEMENT" in raw:
+            return "BANK_STATEMENT"
         if "VENDOR_INVOICE" in raw or "INVOICE_POC_EXTRACTOR" in raw:
             return "invoice_poc_extractor"
         if "BENEFIT_INVOICE" in raw or "INVOICE" in raw:
             return "INVOICE"
         return None
 
-    def _identify_provider(self, filename: str, text_snippet: str) -> str:
+    def _identify_provider(self, filename: str, text_snippet: str, request_id=None) -> str:
         """Lightweight provider/carrier identification using the already-extracted snippet."""
         try:
-            import time
             start_time = time.time()
             prov_prompt = f"""From the document filename and text below, identify the primary company name.
 This could be an insurance CARRIER (e.g., Berkshire Hathaway, Travelers, Chesapeake Employers),
@@ -1416,22 +1478,20 @@ Return ONLY the company name or UNKNOWN:"""
                 temperature=0
             )
             elapsed = time.time() - start_time
-            
-            # Record AI usage
-            request_monitor.record_ai_usage(
-                request_id=self.request_id,
-                prompt_tokens=prov_response.usage.prompt_tokens,
-                completion_tokens=prov_response.usage.completion_tokens,
-                processing_time=elapsed,
-                model="gpt-4o-mini"
-            )
-            
+            if request_id and request_monitor:
+                request_monitor.record_ai_usage(
+                    request_id=request_id,
+                    prompt_tokens=prov_response.usage.prompt_tokens,
+                    completion_tokens=prov_response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
             return prov_response.choices[0].message.content.strip().upper()
         except Exception as e:
             print(f"[Provider-ID] Failed: {e}")
             return "UNKNOWN"
 
-    def _run_with_logging(self, cmd, timeout_secs):
+    def _run_with_logging(self, cmd, timeout_secs, request_id=None):
         """Wrapper to run process with line-by-line output for debugging hangs."""
         print(f"  [Debug] Running command: {' '.join(cmd)}", flush=True)
         try:
@@ -1439,12 +1499,17 @@ Return ONLY the company name or UNKNOWN:"""
             import sys
             import threading
             
+            # Prepare environment
+            env = {"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", **os.environ}
+            if request_id:
+                env["AI_MONITOR_REQUEST_ID"] = str(request_id)
+            
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env={"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", **os.environ},
+                env=env,
                 encoding="utf-8",
                 bufsize=1,
                 universal_newlines=True
@@ -1518,6 +1583,8 @@ Return ONLY the company name or UNKNOWN:"""
         try:
             import pandas as pd
             all_dfs = []
+            reported_totals = []  # Track reported totals across chunks
+            
             for f in processed_files:
                 f_path = Path(f)
                 if f_path.exists():
@@ -1525,6 +1592,14 @@ Return ONLY the company name or UNKNOWN:"""
                     try:
                         df = pd.read_excel(f_path)
                         if not df.empty:
+                            # Add an internal index to track the physical position within this chunk
+                            df['_CHUNK_ROW_INDEX'] = range(len(df))
+                            # Look for reported total in this chunk
+                            if 'PLAN_NAME' in df.columns and 'CURRENT_PREMIUM' in df.columns:
+                                t_rows = df[df['PLAN_NAME'].str.contains("REPORTED INVOICE TOTAL", case=False, na=False)]
+                                for v in t_rows['CURRENT_PREMIUM'].dropna():
+                                    try: reported_totals.append(float(v))
+                                    except: pass
                             all_dfs.append(df)
                     except Exception as e:
                         print(f"  [Merge] Warning: Could not read chunk result {f_path.name}: {e}")
@@ -1537,18 +1612,151 @@ Return ONLY the company name or UNKNOWN:"""
                 
             combined_df = pd.concat(all_dfs, ignore_index=True)
             print(f"  [Merge] Combined rows before filtering: {len(combined_df)}")
-            
-            # Filter out intermediate TOTAL rows to prevent double-counting
+
+            # [V4][MOO] Cross-Chunk Continuity Repair
+            # Handles page breaks occurring at physical PDF chunk boundaries by stitching
+            # placeholders (from start of a chunk) to the last member of the previous chunk.
+            is_moo_doc = any("MUTUAL" in str(f).upper() or "OMAHA" in str(f).upper() for f in processed_files)
+
+            # Aggregate/summary row patterns that should be DROPPED, not repaired
+            _AGGREGATE_PLAN_KEYWORDS = [
+                "PARTICIPANT PREMIUM", "PARTICIPANT ADJUSTMENT", "CURRENT PREMIUM",
+                "AMOUNT DUE", "BILL BRANCH", "NET AMOUNT", "TOTAL BILLED",
+                "REPORTED INVOICE", "LIFE INSURANCE BENEFITS", "TOTAL FOR BILL BRANCH",
+                "TOTAL FOR ALL BRANCHES", "INVOICE SUMMARY"
+            ]
+
+            def _is_aggregate_row(plan_name_str):
+                """Return True if the PLAN_NAME indicates a branch subtotal / section header."""
+                pn = str(plan_name_str or "").upper()
+                return any(kw in pn for kw in _AGGREGATE_PLAN_KEYWORDS)
+
+            if is_moo_doc and 'LASTNAME' in combined_df.columns and 'FIRSTNAME' in combined_df.columns:
+                print(f"  [Merge][MOO] Running Cross-Chunk Continuity Repair...")
+                last_member_ctx = None
+                member_seen_plans = set() # Track plans already processed for the current member to avoid duplicate-plan summaries
+                repair_count = 0
+                drop_indices = []  # indices to drop (aggregate rows that were placeholders)
+                for idx, row in combined_df.iterrows():
+                    ln = str(row.get('LASTNAME', '')).upper()
+                    fn = str(row.get('FIRSTNAME', '')).upper()
+                    plan_n = str(row.get('PLAN_NAME', '')).upper()
+                    
+                    # If this is a placeholder row, check whether it's a real member row or an aggregate
+                    if ln == "MISSING" and fn == "FROM_PREVIOUS_PAGE":
+                        if _is_aggregate_row(plan_n):
+                            # This is a bill-branch subtotal or section header — DROP it
+                            print(f"  [Merge][MOO] Dropping aggregate placeholder row: {plan_n}")
+                            drop_indices.append(idx)
+                            continue
+                        
+                        # [TOP-OF-CHUNK RULE]
+                        # Synthetic cross-chunk placeholders (FROM_PREVIOUS_PAGE) should ONLY appear at 
+                        # the very beginning of a chunk file. If they appear later (e.g. after index 50),
+                        # they are almost certainly noisy summary table rows, not missing member detail.
+                        chunk_idx = row.get('_CHUNK_ROW_INDEX', 999)
+                        if chunk_idx >= 50:
+                            print(f"  [Merge][MOO] Dropping late-chunk placeholder (index {chunk_idx}): {plan_n}")
+                            drop_indices.append(idx)
+                            continue
+                        
+                        # [DUPLICATE PLAN SAFEGUARD] 
+                        # In MOO, members generally have only one row per plan. If we see a placeholder 
+                        # for a plan name we've already seen for this member, it's likely a summary total row.
+                        if plan_n in member_seen_plans and plan_n != "":
+                            print(f"  [Merge][MOO] Dropping duplicate-plan placeholder: {plan_n}")
+                            drop_indices.append(idx)
+                            continue
+
+                        # Check for rows with no premium data at all (section headers like "LIFE INSURANCE BENEFITS")
+                        curr = pd.to_numeric(row.get('CURRENT_PREMIUM'), errors='coerce')
+                        adj = pd.to_numeric(row.get('ADJUSTMENT_PREMIUM'), errors='coerce')
+                        if pd.isna(curr) and pd.isna(adj):
+                            print(f"  [Merge][MOO] Dropping empty placeholder row (no premiums): {plan_n}")
+                            drop_indices.append(idx)
+                            continue
+                        
+                        # Legitimate orphaned member plan row — repair it
+                        if last_member_ctx:
+                            combined_df.at[idx, 'LASTNAME'] = last_member_ctx['LASTNAME']
+                            combined_df.at[idx, 'FIRSTNAME'] = last_member_ctx['FIRSTNAME']
+                            if 'MEMBERID' in combined_df.columns: combined_df.at[idx, 'MEMBERID'] = last_member_ctx['MEMBERID']
+                            if 'COVERAGE' in combined_df.columns: combined_df.at[idx, 'COVERAGE'] = last_member_ctx['COVERAGE']
+                            repair_count += 1
+                        else:
+                            # No context yet (placeholder at very start) — drop
+                            drop_indices.append(idx)
+                            continue
+                    
+                    # Update context if this is a real member (non-total, non-placeholder, non-aggregate)
+                    is_total = "TOTAL" in ln or "TOTAL" in fn or "TOTAL" in plan_n or "GRAND TOTAL" in plan_n
+                    is_agg = _is_aggregate_row(plan_n)
+                    
+                    if not is_total and not is_agg and ln != "MISSING" and ln != "NAN" and ln != "" and ln != "NONE":
+                         # Check if this is a NEW member compared to context
+                         curr_ctx_key = f"{fn}|{ln}"
+                         last_ctx_key = f"{str(last_member_ctx.get('FIRSTNAME','')).upper()}|{str(last_member_ctx.get('LASTNAME','')).upper()}" if last_member_ctx else ""
+                         
+                         if curr_ctx_key != last_ctx_key:
+                             # New member - reset seen plans
+                             member_seen_plans = set()
+                             
+                         last_member_ctx = {
+                             'LASTNAME': row.get('LASTNAME'),
+                             'FIRSTNAME': row.get('FIRSTNAME'),
+                             'MEMBERID': row.get('MEMBERID'),
+                             'COVERAGE': row.get('COVERAGE')
+                         }
+                         member_seen_plans.add(plan_n)
+
+                # Drop the aggregate rows
+                if drop_indices:
+                    combined_df = combined_df.drop(drop_indices)
+                    print(f"  [Merge][MOO] Dropped {len(drop_indices)} aggregate/summary placeholder rows.")
+                if repair_count > 0:
+                    print(f"  [Merge][MOO] Successfully repaired {repair_count} orphaned member rows across chunk boundaries.")
+
+            # Filter out intermediate TOTAL and aggregate rows to prevent double-counting
             if 'PLAN_NAME' in combined_df.columns:
-                combined_df = combined_df[~combined_df['PLAN_NAME'].str.contains("TOTAL", case=False, na=False)]
+                _total_filter = combined_df['PLAN_NAME'].str.contains("TOTAL", case=False, na=False)
+                _agg_filter = combined_df['PLAN_NAME'].apply(lambda x: _is_aggregate_row(x) if is_moo_doc else False)
+                combined_df = combined_df[~(_total_filter | _agg_filter)]
             if 'FIRSTNAME' in combined_df.columns:
                 combined_df = combined_df[~combined_df['FIRSTNAME'].str.contains("TOTAL", case=False, na=False)]
-            
+            # Drop any remaining FROM_PREVIOUS_PAGE rows that weren't repaired
+            # Final cleanup: drop temporary columns
+            if '_CHUNK_ROW_INDEX' in combined_df.columns:
+                combined_df = combined_df.drop(columns=['_CHUNK_ROW_INDEX'])
+                
             print(f"  [Merge] Combined rows after filtering: {len(combined_df)}")
             
             # Sort members alphabetically
             if 'LASTNAME' in combined_df.columns and 'FIRSTNAME' in combined_df.columns:
                 combined_df = combined_df.sort_values(by=['LASTNAME', 'FIRSTNAME'], na_position='last')
+            
+            # Recompute Grand Total and append at the bottom
+            try:
+                sum_current = combined_df['CURRENT_PREMIUM'].sum() if 'CURRENT_PREMIUM' in combined_df.columns else 0.0
+                sum_adjust = combined_df['ADJUSTMENT_PREMIUM'].sum() if 'ADJUSTMENT_PREMIUM' in combined_df.columns else 0.0
+                total_calculated = round(float(sum_current) + float(sum_adjust), 2)
+                
+                max_reported = max(reported_totals) if reported_totals else 0.0
+                
+                # Trust the REPORTED TOTAL from the summary pages as the absolute source of truth
+                effective_total = max_reported if max_reported > 0 else total_calculated
+                
+                label = "REPORTED INVOICE TOTAL (FOR AUDIT)" if max_reported > 0 else "CALCULATED INVOICE TOTAL (FOR AUDIT)"
+                
+                if effective_total != 0:
+                    total_row = {col: None for col in combined_df.columns}
+                    if 'PLAN_NAME' in combined_df.columns:
+                        total_row['PLAN_NAME'] = label
+                    if 'CURRENT_PREMIUM' in combined_df.columns:
+                        total_row['CURRENT_PREMIUM'] = effective_total
+                    
+                    combined_df = pd.concat([combined_df, pd.DataFrame([total_row])], ignore_index=True)
+            except Exception as sum_err:
+                print(f"  [Merge] Warning: Could not append grand total row: {sum_err}")
                 
             combined_df.to_excel(final_output, index=False)
             print(f"  [Merge] Successfully merged results into {final_output.name} ({final_output.stat().st_size} bytes)")
@@ -1557,7 +1765,7 @@ Return ONLY the company name or UNKNOWN:"""
             print(f"  [Merge] Error merging results: {e}")
             return False
 
-    def run_invoice_extractor(self, pdf_path, use_structural=False):
+    def run_invoice_extractor(self, pdf_path, use_structural=False, request_id=None):
         """Run the invoice extractor on the PDF.
         
         Args:
@@ -1603,7 +1811,7 @@ Return ONLY the company name or UNKNOWN:"""
             for i, chunk in enumerate(chunks):
                 print(f"\n  {'─'*10} Processing Chunk {i+1} of {len(chunks)} {'─'*10}")
                 # Process each small chunk using the standard pipeline
-                chunk_res = self.run_invoice_extractor(str(chunk), use_structural=use_structural)
+                chunk_res = self.run_invoice_extractor(str(chunk), use_structural=use_structural, request_id=request_id)
                 if "excel" in chunk_res:
                     processed_excels.append(chunk_res["excel"])
                 else:
@@ -1630,15 +1838,15 @@ Return ONLY the company name or UNKNOWN:"""
         # ──────────────────────────────────────────────────────────────────
 
         try:
-            # For structural extractor, output file is auto-named
+            # For structural extractor, pass the output file explicitly
             if use_structural and script_to_use == STRUCTURAL_INVOICE_SCRIPT:
                 import asyncio
-                result = self._run_with_logging([sys.executable, str(script_to_use), str(pdf_path)], 3600)
-                # Structural extractor creates its own output file
-                output_xlsx = Path(pdf_path).parent / "extracted_data_structural.xlsx"
+                if output_xlsx.exists():
+                    output_xlsx.unlink(missing_ok=True)
+                result = self._run_with_logging([sys.executable, str(script_to_use), str(pdf_path), str(output_xlsx)], 3600, request_id=request_id)
             else:
                 import asyncio
-                result = self._run_with_logging([sys.executable, str(script_to_use), str(pdf_path), str(output_xlsx)], 3600)
+                result = self._run_with_logging([sys.executable, str(script_to_use), str(pdf_path), str(output_xlsx)], 3600, request_id=request_id)
             
             if result.returncode != 0:
                 print(f"\n[ERR] Extraction Failed (Exit Code: {result.returncode})")
@@ -1679,7 +1887,7 @@ Return ONLY the company name or UNKNOWN:"""
             print(f"\n[ERR] Invoice Extraction Error: {e}")
             return {"error": str(e)}
 
-    def run_general_invoice_extractor(self, pdf_path):
+    def run_general_invoice_extractor(self, pdf_path, request_id=None):
         """Run the General Invoice (Vendor) extractor."""
         print("\n" + "="*70)
         print("[STEP 2] RUNNING GENERAL INVOICE EXTRACTOR")
@@ -1722,7 +1930,8 @@ Return ONLY the company name or UNKNOWN:"""
                 import asyncio
                 result = self._run_with_logging(
                     [sys.executable, str(GENERAL_INVOICE_SCRIPT), str(pdf_path)],
-                    3600
+                    3600,
+                    request_id=request_id
                 )
                 if result.returncode != 0:
                     print(f"\n[ERR] General Invoice Extraction Failed (Exit Code: {result.returncode})")
@@ -1884,7 +2093,7 @@ Return ONLY the company name or UNKNOWN:"""
             print(f"\n[ERR] General Invoice (Merged) Error: {e}")
             return {"error": str(e)}
 
-    def run_insurance_extractor(self, pdf_path):
+    def run_insurance_extractor(self, pdf_path, request_id=None):
         """Run the insurance extractor using direct module import (preferred) or subprocess fallback."""
         print("\n" + "="*70)
         print("[STEP 2] RUNNING INSURANCE EXTRACTOR")
@@ -1897,6 +2106,10 @@ Return ONLY the company name or UNKNOWN:"""
             print("\n[INFO] Processing... (this may take 1-2 minutes)\n")
             
             try:
+                # Inject request_id into the extractor instance if supported
+                if hasattr(self.insurance_extractor, 'request_id'):
+                    self.insurance_extractor.request_id = self.request_id
+                
                 # Call the main processing method within the correct backend context
                 with backend_context(INSURANCE_BACKEND_DIR):
                     result = self.insurance_extractor.process_pdf_with_verification(
@@ -1920,7 +2133,7 @@ Return ONLY the company name or UNKNOWN:"""
                     if excel_path:
                         print(f"[OK] Excel File: {Path(excel_path).name}")
                     else:
-                        print(f"[WARN] Excel conversion failed. Continuing with JSON only.")
+                        print(f"[ERR] JSON to Excel conversion returned None")
                     print("\n" + "="*70)
                     print("[OK] INSURANCE EXTRACTION COMPLETE")
                     print("="*70)
@@ -1973,7 +2186,7 @@ Return ONLY the company name or UNKNOWN:"""
                             if excel_path:
                                 print(f"[OK] Excel File: {Path(excel_path).name}")
                             else:
-                                print(f"[WARN] Excel conversion failed. Continuing with JSON only.")
+                                print(f"[ERR] JSON to Excel conversion returned None")
                             print("\n" + "="*70)
                             print("[OK] INSURANCE EXTRACTION COMPLETE")
                             print("="*70)
@@ -1986,7 +2199,7 @@ Return ONLY the company name or UNKNOWN:"""
                 print(f"Error Details:\n{result.stderr}")
                 return {"error": result.stderr}
 
-    def run_work_compensation_extractor(self, pdf_path):
+    def run_work_compensation_extractor(self, pdf_path, request_id=None):
         """Run the work compensation extractor using direct module import."""
         print("\n" + "="*70)
         print("[STEP] RUNNING WORK COMPENSATION EXTRACTOR")
@@ -1998,6 +2211,10 @@ Return ONLY the company name or UNKNOWN:"""
             print("\n⏳ Processing... (this may take 1-2 minutes)\n")
             
             try:
+                # Inject request_id into the extractor instance if supported
+                if hasattr(self.work_comp_extractor, 'request_id'):
+                    self.work_comp_extractor.request_id = self.request_id
+                
                 # Call the main processing method within the correct backend context
                 with backend_context(WORK_COMP_BACKEND_DIR):
                     result = self.work_comp_extractor.process_pdf_with_verification(
@@ -2029,6 +2246,41 @@ Return ONLY the company name or UNKNOWN:"""
         else:
             print("\n[ERR] Error: Work Comp Extractor not initialized.")
             return {"error": "Work Comp Extractor not available"}
+
+    def run_bank_statement_extractor(self, pdf_path, request_id=None):
+        """Run the bank statement extractor using direct module import."""
+        print("\n" + "="*70)
+        print("[STEP] RUNNING BANK STATEMENT EXTRACTOR")
+        print("="*70)
+        print(f"📂 Input: {pdf_path}")
+        
+        if self.bank_extractor:
+            print(f"🔧 Method: Direct Module Import (StatementExtractor)")
+            print("\n⏳ Processing... (this may take 1-2 minutes)\n")
+            
+            try:
+                # Need to add bank statement dir to sys.path for internal imports inside statement_extractor
+                if str(BANK_STATEMENT_BACKEND_DIR) not in sys.path:
+                    sys.path.insert(0, str(BANK_STATEMENT_BACKEND_DIR))
+                
+                result = self.bank_extractor.process_pdf(pdf_path)
+                
+                print("[OK] Bank Statement extractor completed successfully!")
+                
+                return {
+                    "type": "BANK_STATEMENT",
+                    "json": result.get("json_file"),
+                    "excel": result.get("excel_file"),
+                    "session_dir": result.get("session_dir")
+                }
+            except Exception as e:
+                print(f"\n❌ Bank Statement Extraction Error: {e}")
+                import traceback
+                traceback.print_exc()
+                return {"error": f"Bank Statement extraction failed: {str(e)}"}
+        else:
+            print("\n[ERR] Error: Bank Statement Extractor not initialized.")
+            return {"error": "Bank Statement Extractor not available"}
 
     def extract_snippet_for_id(self, pdf_path, max_pages=1):
         """Optimized OCR extraction for ID documents (Passport, DL, SSN).
@@ -2171,7 +2423,7 @@ Return ONLY the company name or UNKNOWN:"""
         print(f"[ID-OCR] Final snippet ready: {len(final)} chars")
         return final
 
-    def run_identification_extractor(self, pdf_path):
+    def run_identification_extractor(self, pdf_path, request_id=None):
         """Extract personal information from IDs (Passport, DL, SSN) using gpt-4.1-mini."""
         print("\n" + "="*70)
         print("[STEP] RUNNING IDENTIFICATION EXTRACTOR")
@@ -2202,27 +2454,41 @@ Return ONLY the company name or UNKNOWN:"""
             }}
             """
 
+            start_time = time.time()
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0
             )
+            elapsed = time.time() - start_time
+            if request_id and request_monitor:
+                request_monitor.record_ai_usage(
+                    request_id=request_id,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    processing_time=elapsed,
+                    model="gpt-4o-mini"
+                )
             
             data = json.loads(response.choices[0].message.content)
             
             # Save to unified_outputs
             output_json = OUTPUT_BASE / f"{Path(pdf_path).stem}_id.json"
             with open(output_json, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
+                json.dump(data, f, indent=4, ensure_ascii=False)
             
             # Convert to Excel
             excel_path = self.json_to_xlsx(output_json)
             
+            if not excel_path:
+                print(f"[ERR] Identification Excel conversion failed.")
+            
+            
             return {
                 "type": "IDENTIFICATION",
                 "json": str(output_json),
-                "excel": excel_path,
+                "excel": excel_path if excel_path else "None",
                 "data": data
             }
         except Exception as e:
@@ -2428,140 +2694,169 @@ Return ONLY the company name or UNKNOWN:"""
         if file_ext not in [".pdf", ".xlsx", ".xls", ".csv"]:
             return {"error": f"Unsupported file format: {file_ext}"}
 
-        # Step 1: Classify (Layer 1 & 2)
-        doc_type, provider = self.classify_document(file_path)
-        
-        if doc_type == "UNKNOWN":
-            print("\n" + "="*70)
-            print("[ERR] PROCESSING FAILED: UNKNOWN DOCUMENT TYPE")
-            print("="*70)
-            return {"error": "Could not classify document type"}
+        # Count pages for monitoring
+        num_pages = 0
+        if file_ext == ".pdf":
+            try:
+                import fitz
+                doc = fitz.open(str(file_path))
+                num_pages = len(doc)
+                doc.close()
+            except Exception:
+                pass
 
-        # ── Post-classification safety guard ─────────────────────────────────
-        # For spreadsheet files: WORK_COMPENSATION and INSURANCE_CLAIMS extractors
-        # only support PDF. If a .xlsx/.csv was classified as one of these, redirect
-        # to INVOICE pipeline (ExcelExtractor handles it via semantic mapping).
-        if file_ext in [".xlsx", ".xls", ".csv"] and doc_type not in ["INVOICE"]:
-            print(f"[WARN] Spreadsheet classified as {doc_type} — redirecting to INVOICE pipeline (Excel/CSV only supported there).")
-            doc_type = "INVOICE"
+        import tempfile
+        # Use a context manager to ensure the temp directory is cleaned up at the end
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            working_path = file_path
+            
+            # ── GLOBAL ROTATION & NORMALIZATION ──────────────────────────────
+            if file_ext == ".pdf":
+                print("\n[STEP] NORMALIZING PDF (ORIENTATION & ROTATION)...")
+                # We save a corrected copy for all downstream stages (classification + extraction)
+                working_path = Path(self._detect_rotation_and_fix(str(file_path), tmp_dir))
+            
+            # Step 1: Classify (Layer 1 & 2)
+            doc_type, provider = self.classify_document(str(working_path), request_id=request_id)
+            
+            if doc_type == "UNKNOWN":
+                print("\n" + "="*70)
+                print("[ERR] PROCESSING FAILED: UNKNOWN DOCUMENT TYPE")
+                print("="*70)
+                return {"error": "Could not classify document type"}
 
-        print(f"\n[ROUTE] doc_type={doc_type} | provider={provider} | format={file_ext}")
+            # ── Post-classification safety guard ─────────────────────────────
+            if file_ext in [".xlsx", ".xls", ".csv"] and doc_type not in ["INVOICE"]:
+                print(f"[WARN] Spreadsheet classified as {doc_type} — redirecting to INVOICE pipeline.")
+                doc_type = "INVOICE"
 
-        # Step 2: Route to appropriate extractor (Layer 4)
-        if doc_type == "INVOICE":
-            # Layer 4: Format-Specific Extraction
-            if file_ext in [".xlsx", ".xls", ".csv"]:
-                extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
-                excel_path = extractor.process(file_path)
-                
-                if isinstance(excel_path, dict) and "error" in excel_path:
-                    # ExcelExtractor returned a graceful failure
-                    result = excel_path
-                elif excel_path:
-                    result = {
-                        "type": "INVOICE",
-                        "excel": excel_path,
-                        "json": self.xlsx_to_json(Path(excel_path))
-                    }
-                else:
-                    result = {"error": "Excel/CSV extraction failed to yield structured data"}
-            else:
-                # TRY 1: Standard Extractor (PDF)
-                result = self.run_invoice_extractor(file_path, use_structural=False)
-                
-                # FALLBACK: If standard extraction yielded no data or failed, try structural
-                should_fallback = False
-                
-                # 1. Proactive Detection: Is this a Guardian or GIS 23 invoice?
-                is_guardian = False
-                is_gis23 = False
-                try:
-                    import pdfplumber
-                    with pdfplumber.open(file_path) as pdf:
-                        first_page_text = (pdf.pages[0].extract_text() or "").lower()
-                        if "guardian" in first_page_text:
-                            is_guardian = True
-                            print("[INFO] Guardian invoice detected proactively.")
-                        if "gis 23" in first_page_text or "restaurant services" in first_page_text:
-                            is_gis23 = True
-                            print("[INFO] GIS 23 Restaurant Services invoice detected proactively.")
-                except Exception as e:
-                    print(f"  [Router] Detection failed: {e}")
+            print(f"\n[ROUTE] doc_type={doc_type} | provider={provider} | format={file_ext}")
 
-                if "error" in result:
-                    should_fallback = True
-                else:
-                    try:
-                        df = pd.read_excel(result["excel"])
-                        if len(df) <= 1: # Only header or empty
-                            should_fallback = True
-                        
-                        # 2. Force fallback for complex invoices to ensure accuracy and prevent standard timeouts
-                        if is_guardian or is_gis23:
-                             should_fallback = True
-                             reason = "Guardian" if is_guardian else "GIS 23"
-                             print(f"[WARN] {reason} invoice: Forcing Structural layer for maximum accuracy...")
-                    except:
-                        should_fallback = True
-                
-                if should_fallback:
-                    print("\n[WARN] Standard extraction yielded insufficient results. Falling back to Structural Layer...")
-                    structural_result = self.run_invoice_extractor(file_path, use_structural=True)
-                    if "error" not in structural_result:
-                        result = structural_result
+            # Step 2: Route to appropriate extractor (Layer 4)
+            if doc_type == "INVOICE":
+                # Layer 4: Format-Specific Extraction
+                if file_ext in [".xlsx", ".xls", ".csv"]:
+                    extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
+                    excel_path = extractor.process(working_path)
+                    
+                    if isinstance(excel_path, dict) and "error" in excel_path:
+                        # ExcelExtractor returned a graceful failure
+                        result = excel_path
+                    elif excel_path:
+                        result = {
+                            "type": "INVOICE",
+                            "excel": excel_path,
+                            "json": self.xlsx_to_json(Path(excel_path))
+                        }
                     else:
-                        print(f"[ERR] Structural fallback also failed: {structural_result.get('error')}")
-
-        elif doc_type == "invoice_poc_extractor":
-            result = self.run_general_invoice_extractor(file_path)
-
-        elif doc_type == "INSURANCE_CLAIMS":
-            if file_ext in [".xlsx", ".xls", ".csv"]:
-                print(f"[INFO] Routing Claim Spreadsheet to Structured Extractor...")
-                extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
-                excel_path = extractor.process(file_path)
-
-                if excel_path:
-                    result = {
-                        "type": "INSURANCE_CLAIMS",
-                        "excel": excel_path,
-                        "json": self.xlsx_to_json(Path(excel_path))
-                    }
+                        result = {"error": "Excel/CSV extraction failed to yield structured data"}
                 else:
-                    result = {"error": "Excel/CSV claim extraction failed to yield structured data"}
-            elif file_ext == ".pdf":
-                result = self.run_insurance_extractor(file_path)
+                    # TRY 1: Standard Extractor (PDF)
+                    result = self.run_invoice_extractor(str(working_path), use_structural=False, request_id=request_id)
+                    
+                    # FALLBACK: If standard extraction yielded no data or failed, try structural
+                    should_fallback = False
+                    
+                    # 1. Proactive Detection: Is this a Guardian or GIS 23 invoice?
+                    is_guardian = False
+                    is_gis23 = False
+                    is_angle = False
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(working_path) as pdf:
+                            first_page_text = (pdf.pages[0].extract_text() or "").lower()
+                            if "guardian" in first_page_text:
+                                is_guardian = True
+                                print("[INFO] Guardian invoice detected proactively.")
+                            if "gis 23" in first_page_text or "restaurant services" in first_page_text:
+                                is_gis23 = True
+                                print("[INFO] GIS 23 Restaurant Services invoice detected proactively.")
+                            if "angle" in first_page_text:
+                                is_angle = True
+                    except Exception as e:
+                        print(f"  [Router] Detection failed: {e}")
+
+                    if "error" in result:
+                        should_fallback = True
+                    else:
+                        try:
+                            df = pd.read_excel(result["excel"])
+                            if len(df) <= 1: # Only header or empty
+                                should_fallback = True
+                            
+                            # 2. Force fallback for complex invoices to ensure accuracy and prevent standard timeouts
+                            if is_guardian or is_gis23 or is_angle:
+                                 should_fallback = True
+                                 reason = "Guardian" if is_guardian else ("Angle" if is_angle else "GIS 23")
+                                 print(f"[WARN] {reason} invoice: Forcing Structural layer for maximum accuracy...")
+                        except:
+                            should_fallback = True
+                    
+                    if should_fallback:
+                        print("\n[WARN] Standard extraction yielded insufficient results. Falling back to Structural Layer...")
+                        structural_result = self.run_invoice_extractor(str(working_path), use_structural=True, request_id=request_id)
+                        if "error" not in structural_result:
+                            result = structural_result
+                        else:
+                            print(f"[ERR] Structural fallback also failed: {structural_result.get('error')}")
+
+            elif doc_type == "invoice_poc_extractor":
+                result = self.run_general_invoice_extractor(str(working_path), request_id=request_id)
+
+            elif doc_type == "INSURANCE_CLAIMS":
+                if file_ext in [".xlsx", ".xls", ".csv"]:
+                    print(f"[INFO] Routing Claim Spreadsheet to Structured Extractor...")
+                    extractor = ExcelExtractor(output_base=OUTPUT_BASE, request_id=self.request_id)
+                    excel_path = extractor.process(working_path)
+
+                    if excel_path:
+                        result = {
+                            "type": "INSURANCE_CLAIMS",
+                            "excel": excel_path,
+                            "json": self.xlsx_to_json(Path(excel_path))
+                        }
+                    else:
+                        result = {"error": "Excel/CSV claim extraction failed to yield structured data"}
+                elif file_ext == ".pdf":
+                    result = self.run_insurance_extractor(str(working_path), request_id=request_id)
+                else:
+                     print(f"[ERR] Insurance extractor called for {file_ext} file. Not supported yet.")
+                     result = {"error": "Insurance extraction (Loss Runs/Claims) currently only supports PDF or common spreadsheet formats (XLSX, CSV)."}
+            elif doc_type == "WORK_COMPENSATION":
+                result = self.run_work_compensation_extractor(str(working_path), request_id=request_id)
+            elif doc_type == "BANK_STATEMENT":
+                result = self.run_bank_statement_extractor(str(working_path), request_id=request_id)
+            elif doc_type == "IDENTIFICATION":
+                result = self.run_identification_extractor(str(working_path), request_id=request_id)
             else:
-                 print(f"[ERR] Insurance extractor called for {file_ext} file. Not supported yet.")
-                 return {"error": "Insurance extraction (Loss Runs/Claims) currently only supports PDF or common spreadsheet formats (XLSX, CSV)."}
-        elif doc_type == "WORK_COMPENSATION":
-            result = self.run_work_compensation_extractor(file_path)
-        elif doc_type == "IDENTIFICATION":
-            result = self.run_identification_extractor(file_path)
-        else:
-            return {"error": f"Unsupported document type: {doc_type}"}
-        
-        # Final summary (Layer 7: mandatory duo formats already handled by run_invoice_extractor)
-        if "error" not in result:
-            print("\n" + "="*70)
-            print("[OK] 7-LAYER PROCESSING COMPLETE - SUCCESS!")
-            print("="*70)
-            print(f"[INFO] Document Type: {result.get('type')}")
-            print(f"[INFO] Provider: {provider}")
-            print(f"[INFO] Excel File: {Path(result.get('excel', '')).name if result.get('excel') else 'N/A'}")
-            print(f"[INFO] JSON File: {Path(result.get('json', '')).name if result.get('json') else 'N/A'}")
-            print(f"[INFO] Completed: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            print("="*70 + "\n")
-        else:
-            print("\n" + "="*70)
-            print("[ERR] PROCESSING FAILED")
-            print("="*70)
-            print(f"Error: {result.get('error')}")
-            print("="*70 + "\n")
-        
-        return result
-    
-    
+                result = {"error": f"Unsupported document type: {doc_type}"}
+            
+            # Final summary (Layer 7: mandatory duo formats already handled by run_invoice_extractor)
+            if "error" not in result:
+                print("\n" + "="*70)
+                print("[OK] 7-LAYER PROCESSING COMPLETE - SUCCESS!")
+                print("="*70)
+                print(f"[INFO] Document Type: {result.get('type')}")
+                print(f"[INFO] Provider: {provider}")
+                print(f"[INFO] Excel File: {Path(result.get('excel', '')).name if result.get('excel') else 'N/A'}")
+                print(f"[INFO] JSON File: {Path(result.get('json', '')).name if result.get('json') else 'N/A'}")
+                print(f"[INFO] Completed: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print("="*70 + "\n")
+            else:
+                print("\n" + "="*70)
+                print("[ERR] PROCESSING FAILED")
+                print("="*70)
+                print(f"Error: {result.get('error')}")
+                print("="*70 + "\n")
+            
+            # Ensure metadata is in the result for monitoring
+            if "error" not in result:
+                result.setdefault("type", doc_type)
+                result.setdefault("provider", provider)
+                result.setdefault("pages", num_pages)
+                
+            return result
+
 
 if __name__ == "__main__":
     import sys
