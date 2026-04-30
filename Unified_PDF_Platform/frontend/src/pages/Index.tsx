@@ -209,7 +209,6 @@ const Index = () => {
 
       {/* Footer */}
       <footer className="text-center py-6 text-xs text-muted-foreground">
-        Data Retrieval Ingestion Verification Engine • AI-Powered PDF Processing
       </footer>
     </div>
   );

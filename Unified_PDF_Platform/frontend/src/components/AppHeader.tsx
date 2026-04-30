@@ -1,5 +1,4 @@
 import { FileText, Moon, Sun } from "lucide-react";
-import Logo from "./Logo";
 import { useState, useEffect } from "react";
 import { Button } from "./ui/button";
 
@@ -31,9 +30,8 @@ const AppHeader = () => {
           </div>
           <div className="hidden sm:block">
             <h1 className="text-2xl font-bold tracking-tight text-[hsl(var(--header-fg))] whitespace-nowrap">
-              Data Retrieval Ingestion Verification Engine
+              AI-Powered PDF Processing & Data Extraction
             </h1>
-            <p className="text-sm text-[hsl(var(--header-fg))]/70">AI-Powered PDF Processing & Data Extraction</p>
           </div>
         </div>
 
@@ -62,7 +60,6 @@ const AppHeader = () => {
 
           <div className="h-6 w-[1px] bg-[hsl(var(--header-fg))]/10 mx-1" />
 
-          <Logo className="hover:scale-105 transition-transform duration-300 pl-2" />
         </div>
       </div>
     </header>
