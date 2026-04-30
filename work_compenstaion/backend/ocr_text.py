@@ -5,11 +5,19 @@ Extracts text from scanned/image-based PDFs using Tesseract OCR
 Converts PDF pages to images and performs optical character recognition
 """
 import os
+import re
+import threading
 from pathlib import Path
 from io import BytesIO
 import base64
 import pytesseract
 from pdf2image import convert_from_path
+
+try:
+    import rostaing_ocr
+    ROSTAING_AVAILABLE = True
+except ImportError:
+    ROSTAING_AVAILABLE = False
 
 
 class OCRPDFExtractor:
