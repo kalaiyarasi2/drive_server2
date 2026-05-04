@@ -85,7 +85,7 @@ Return ONLY a JSON object:
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4o",
                 messages=messages,
                 response_format={"type": "json_object"},
                 temperature=0.0
@@ -124,7 +124,7 @@ Return ONLY a JSON object describing the pattern:
 """
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
                 temperature=0.0

@@ -3,6 +3,8 @@ import re
 from typing import Dict, List, Optional, Tuple
 from insurance_extractor import EnhancedInsuranceExtractor, filter_claims_by_claim_year, MIN_INCLUDED_CLAIM_YEAR
 from pdf_rotation import auto_rotate_pdf_content
+from auto_rotation_ocr import run_pipeline_preserve_layout
+from pdf_detector import PDFDetector
 import tempfile
 import shutil
 
@@ -190,12 +192,31 @@ class ChunkedInsuranceExtractor(EnhancedInsuranceExtractor):
         temp_rotated_pdf = os.path.join(temp_rotated_dir, "rotated_temp.pdf")
         original_pdf_path = pdf_path
         
+        is_scanned = None
         try:
-            print(f"🔄 Checking for rotation...")
-            was_rotated = auto_rotate_pdf_content(pdf_path, temp_rotated_pdf)
+            print(f"🔍 Identifying PDF type (Digital vs Scanned)...")
+            detector = PDFDetector(pdf_path)
+            is_scanned = detector.is_scanned()
+            
+            if is_scanned:
+                print(f"📸 SCANNED PDF DETECTED. Applying high-accuracy OSD rotation...")
+                # Use the new scanned-specific rotation module
+                # Pass temp_rotated_dir as work_dir to ensure isolation
+                rotated_pdf, reports = run_pipeline_preserve_layout(
+                    pdf_path, 
+                    work_dir=temp_rotated_dir,
+                    output_pdf=temp_rotated_pdf,
+                    dpi=200, 
+                    osd_min_conf=0.3
+                )
+                was_rotated = any(r.get('applied_rotate', 0) != 0 for r in reports)
+            else:
+                print(f"📄 DIGITAL PDF DETECTED. Applying standard text-based rotation...")
+                # Use existing digital-specific rotation module
+                was_rotated = auto_rotate_pdf_content(pdf_path, temp_rotated_pdf)
             
             if was_rotated:
-                print(f"   ✓ Document rotated. Processing corrected version.")
+                print(f"   ✓ Document rotated/corrected. Processing updated version.")
                 pdf_path = temp_rotated_pdf
             else:
                 print(f"   ✓ Document orientation correct.")
@@ -204,15 +225,25 @@ class ChunkedInsuranceExtractor(EnhancedInsuranceExtractor):
             
         # Create session output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:20]
-        file_slug = os.path.basename(pdf_path).replace(" ", "_").replace(".", "_")[:20]
+        # Use original filename for slug to avoid 'rotated_temp_pdf' in folder names
+        file_slug = os.path.basename(original_pdf_path).replace(" ", "_").replace(".", "_")[:20]
         session_id = f"{timestamp}_{file_slug}"
         session_dir = self.output_dir / f"extraction_{session_id}"
         session_dir.mkdir(parents=True, exist_ok=True)
         
         self.current_session_dir = session_dir
+
+        # Save the processed PDF to the output directory for reference
+        processed_pdf_name = f"processed_{os.path.basename(original_pdf_path)}"
+        processed_pdf_path = session_dir / processed_pdf_name
+        try:
+            shutil.copy2(pdf_path, processed_pdf_path)
+            print(f"📄 Processed PDF saved for reference: {processed_pdf_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to save processed PDF: {e}")
         
         # Step 1: Extract text
-        all_text, pages_metadata = self.extract_text_from_pdf(pdf_path)
+        all_text, pages_metadata = self.extract_text_from_pdf(pdf_path, is_scanned=is_scanned)
         
         # Save combined text
         text_file = session_dir / "extracted_text.txt"
