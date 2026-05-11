@@ -3,6 +3,7 @@ import zipfile
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from collections import defaultdict
 from fastapi import APIRouter, File, UploadFile, HTTPException, Request, Query
 from fastapi.responses import JSONResponse, FileResponse, RedirectResponse, PlainTextResponse
 from pydantic import BaseModel, Field
@@ -252,3 +253,445 @@ async def merge_json_endpoint(body: MergeJsonRequest):
     except Exception as e:
         print(f"❌ Error merging JSON: {e}")
         return JSONResponse({"error": str(e), "success": False}, status_code=500)
+
+
+# ── Response models for /api/claim-analysis ──────────────────────────────────
+
+class ClaimsStatus(BaseModel):
+    closed: int = Field(..., description="Number of closed claims")
+    open: int = Field(..., description="Number of open claims")
+    reopened: int = Field(..., description="Number of reopened claims")
+    other: int = Field(..., description="Number of claims with other status")
+
+class ExecutiveSummary(BaseModel):
+    total_claims: int = Field(..., description="Total number of claims")
+    total_incurred: float = Field(..., description="Sum of total_incurred across all claims")
+    total_paid: float = Field(..., description="Sum of all paid amounts (medical + indemnity + expense)")
+    medical_paid: float = Field(..., description="Sum of medical_paid across all claims")
+    indemnity_paid: float = Field(..., description="Sum of indemnity_paid across all claims")
+    expense_paid: float = Field(..., description="Sum of expense_paid across all claims")
+    total_reserves: float = Field(..., description="Sum of all reserves (medical + indemnity + expense)")
+    medical_reserve: float = Field(..., description="Sum of medical_reserve across all claims")
+    indemnity_reserve: float = Field(..., description="Sum of indemnity_reserve across all claims")
+    expense_reserve: float = Field(..., description="Sum of expense_reserve across all claims")
+    claims_status: ClaimsStatus = Field(..., description="Breakdown of claim statuses")
+    litigated_claims: int = Field(..., description="Number of litigated claims")
+    reopened_claims: int = Field(..., description="Number of reopened claims")
+
+class ClaimDetail(BaseModel):
+    employee_name: Optional[str] = None
+    claim_number: Optional[str] = None
+    carrier_name: Optional[str] = None
+    policy_number: Optional[str] = None
+    injury_date: Optional[str] = None
+    claim_year: Optional[int] = None
+    status: Optional[str] = None
+    injury_description: Optional[str] = None
+    body_part: Optional[str] = None
+    injury_type: Optional[str] = None
+    claim_class: Optional[str] = None
+    medical_paid: float = 0.0
+    medical_reserve: float = 0.0
+    indemnity_paid: float = 0.0
+    indemnity_reserve: float = 0.0
+    expense_paid: float = 0.0
+    expense_reserve: float = 0.0
+    total_paid: float = 0.0
+    total_reserve: float = 0.0
+    total_incurred: float = 0.0
+    litigation: Optional[str] = None
+    reopen: Optional[str] = None
+
+class YearBreakdown(BaseModel):
+    year: int
+    claim_count: int
+    total_incurred: float
+    total_paid: float
+    total_reserves: float
+    open_count: int
+    closed_count: int
+
+class CarrierBreakdown(BaseModel):
+    carrier_name: str
+    claim_count: int
+    total_incurred: float
+    total_paid: float
+    total_reserves: float
+
+class HighValueClaim(BaseModel):
+    claim_number: Optional[str] = None
+    employee_name: Optional[str] = None
+    total_incurred: float
+    total_paid: float
+    total_reserves: float
+
+class Observation(BaseModel):
+    category: str = Field(..., description="Category: 'risk', 'info', 'warning'")
+    message: str = Field(..., description="Human-readable observation message")
+
+class ClaimAnalysisResponse(BaseModel):
+    success: bool = True
+    report_title: str = "Insurance Claims Analysis Report"
+    generated_at: str = Field(..., description="ISO timestamp when the report was generated")
+    executive_summary: ExecutiveSummary
+    claims_overview: List[ClaimDetail] = Field(..., description="Detailed list of all claims")
+    year_wise_breakdown: List[YearBreakdown] = Field(default=[], description="Claims aggregated by year")
+    carrier_breakdown: List[CarrierBreakdown] = Field(default=[], description="Claims aggregated by carrier")
+    top_high_value_claims: List[HighValueClaim] = Field(default=[], description="Top 5 claims by total_incurred")
+    litigated_claims_list: List[ClaimDetail] = Field(default=[], description="Claims where litigation = Yes")
+    observations: List[Observation] = Field(default=[], description="Auto-generated observations and risk flags")
+
+
+def generate_markdown_report(report: ClaimAnalysisResponse) -> str:
+    """
+    Generates a formatted Markdown report from a ClaimAnalysisResponse object.
+    """
+    es = report.executive_summary
+    
+    md = f"# {report.report_title}\n\n"
+    
+    # 1. Executive Summary
+    md += "## 1. Executive Summary\n"
+    md += f"- **Total Claims**: {es.total_claims}\n"
+    md += "- **Claims Status**:\n"
+    md += f"  - Open: {es.claims_status.open}\n"
+    md += f"  - Closed: {es.claims_status.closed}\n"
+    md += f"  - Reopened: {es.claims_status.reopened}\n"
+    md += f"  - Other: {es.claims_status.other}\n"
+    md += f"- **Total Incurred**: ${es.total_incurred:,.2f}\n"
+    md += f"- **Total Paid**: ${es.total_paid:,.2f}\n"
+    md += f"  - Medical: ${es.medical_paid:,.2f}\n"
+    md += f"  - Indemnity: ${es.indemnity_paid:,.2f}\n"
+    md += f"- **Total Reserves**: ${es.total_reserves:,.2f}\n"
+    md += f"- **Litigated Claims**: {es.litigated_claims}\n"
+    md += f"- **Reopened Claims**: {es.reopened_claims}\n\n"
+    
+    # 2. Detailed Breakdown
+    md += "## 2. Detailed Breakdown\n"
+    
+    # Claims Overview
+    md += "### Claims Overview\n"
+    # Group claims by status
+    status_groups = defaultdict(list)
+    for claim in report.claims_overview:
+        status_groups[claim.status].append(claim)
+    
+    for status in ["Closed", "Open", "Reopened", "Other"]:
+        claims = status_groups.get(status, [])
+        if claims:
+            md += f"- **{status} Claims**: {len(claims)}\n"
+            for c in claims:
+                name = c.employee_name or "Unknown"
+                md += f"  - Claim Number: {c.claim_number} ({name}) - {c.injury_type}, Total Paid: ${c.total_paid:,.2f}\n"
+    
+    md += "\n"
+    
+    # Carrier Breakdown
+    md += "### Carrier Breakdown\n"
+    # To get status distribution per carrier, we need to re-aggregate
+    carrier_status = defaultdict(lambda: defaultdict(int))
+    for claim in report.claims_overview:
+        carrier_status[claim.carrier_name or "Unknown"][claim.status] += 1
+    
+    for cb in report.carrier_breakdown:
+        carrier = cb.carrier_name.replace('\n', ' ')
+        counts = carrier_status[cb.carrier_name or "Unknown"]
+        status_parts = []
+        for s in ["Open", "Closed", "Reopened", "Other"]:
+            if counts[s] > 0:
+                status_parts.append(f"{counts[s]} {s}")
+        
+        status_str = ", ".join(status_parts)
+        md += f"- **{carrier}**: {cb.claim_count} Claim{'s' if cb.claim_count > 1 else ''} ({status_str})\n"
+    
+    md += "\n"
+    
+    # Injury Type Breakdown
+    md += "### Injury Type Breakdown\n"
+    injury_agg = defaultdict(lambda: {"count": 0, "total_paid": 0.0})
+    for claim in report.claims_overview:
+        it = claim.injury_type or "Unknown"
+        injury_agg[it]["count"] += 1
+        injury_agg[it]["total_paid"] += claim.total_paid
+        
+    for it in ["Medical Only", "Indemnity"]:
+        data = injury_agg.get(it, {"count": 0, "total_paid": 0.0})
+        md += f"- **{it}**: {data['count']} Claim{'s' if data['count'] != 1 else ''} (Total Paid: ${data['total_paid']:,.2f})\n"
+        
+    return md
+
+
+
+# ── Endpoint: /api/claim-analysis ────────────────────────────────────────────
+
+@router.post(
+    "/api/claim-analysis",
+    summary="Structured Claim Analysis Report",
+    description=(
+        "Generate a **structured JSON** Insurance Claims Analysis Report from extracted claims data.\n\n"
+        "Unlike `/api/claim-summary` (which returns AI-generated text), this endpoint returns a "
+        "deterministic, structured JSON response with:\n"
+        "- **Executive Summary** — totals, status breakdown, paid/reserves\n"
+        "- **Claims Overview** — full list of claims with all fields\n"
+        "- **Year-wise Breakdown** — aggregated by claim year\n"
+        "- **Carrier Breakdown** — aggregated by carrier/insurer\n"
+        "- **Top High-Value Claims** — top 5 by total incurred\n"
+        "- **Litigated Claims** — filtered list of litigated claims\n"
+        "- **Observations** — auto-generated risk flags and insights\n\n"
+        "**No LLM/API key required.** All values are computed server-side."
+    ),
+    tags=["AI Summary"],
+    response_model=ClaimAnalysisResponse
+)
+async def get_claim_analysis(body: ClaimSummaryRequest):
+    """
+    Generate a structured JSON analysis report for provided claims data.
+    """
+    from datetime import datetime
+
+    claims = body.claims
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims provided")
+
+    # ── Executive Summary ────────────────────────────────────────────────
+    status_counts = {"Open": 0, "Closed": 0, "Reopened": 0, "Other": 0}
+    total_medical_paid = 0.0
+    total_indemnity_paid = 0.0
+    total_expense_paid = 0.0
+    total_medical_reserve = 0.0
+    total_indemnity_reserve = 0.0
+    total_expense_reserve = 0.0
+    total_incurred = 0.0
+    litigated_count = 0
+    reopened_count = 0
+
+    # Year & Carrier aggregation
+    year_agg = defaultdict(lambda: {
+        "claim_count": 0, "total_incurred": 0.0,
+        "total_paid": 0.0, "total_reserves": 0.0,
+        "open_count": 0, "closed_count": 0
+    })
+    carrier_agg = defaultdict(lambda: {
+        "claim_count": 0, "total_incurred": 0.0,
+        "total_paid": 0.0, "total_reserves": 0.0
+    })
+
+    claim_details: List[ClaimDetail] = []
+    litigated_list: List[ClaimDetail] = []
+    high_value_candidates: List[dict] = []
+
+    for c in claims:
+        m_paid = float(c.get("medical_paid") or 0)
+        i_paid = float(c.get("indemnity_paid") or 0)
+        e_paid = float(c.get("expense_paid") or 0)
+        m_res = float(c.get("medical_reserve") or 0)
+        i_res = float(c.get("indemnity_reserve") or 0)
+        e_res = float(c.get("expense_reserve") or 0)
+        t_inc = float(c.get("total_incurred") or 0)
+        t_paid = m_paid + i_paid + e_paid
+        t_res = m_res + i_res + e_res
+
+        total_medical_paid += m_paid
+        total_indemnity_paid += i_paid
+        total_expense_paid += e_paid
+        total_medical_reserve += m_res
+        total_indemnity_reserve += i_res
+        total_expense_reserve += e_res
+        total_incurred += t_inc
+
+        # Status
+        status = c.get("status", "Other")
+        if status in status_counts:
+            status_counts[status] += 1
+        else:
+            status_counts["Other"] += 1
+
+        # Reopened
+        if str(c.get("reopen", "")).lower() == "true":
+            reopened_count += 1
+
+        # Litigation
+        is_litigated = str(c.get("litigation", "")).lower() == "yes"
+        if is_litigated:
+            litigated_count += 1
+
+        # Build claim detail
+        detail = ClaimDetail(
+            employee_name=c.get("employee_name"),
+            claim_number=c.get("claim_number"),
+            carrier_name=c.get("carrier_name"),
+            policy_number=c.get("policy_number"),
+            injury_date=c.get("injury_date_time") or c.get("injury_date"),
+            claim_year=c.get("claim_year"),
+            status=status,
+            injury_description=c.get("injury_description"),
+            body_part=c.get("body_part"),
+            injury_type=c.get("injury_type"),
+            claim_class=c.get("claim_class"),
+            medical_paid=m_paid,
+            medical_reserve=m_res,
+            indemnity_paid=i_paid,
+            indemnity_reserve=i_res,
+            expense_paid=e_paid,
+            expense_reserve=e_res,
+            total_paid=t_paid,
+            total_reserve=t_res,
+            total_incurred=t_inc,
+            litigation=c.get("litigation"),
+            reopen=c.get("reopen")
+        )
+        claim_details.append(detail)
+
+        if is_litigated:
+            litigated_list.append(detail)
+
+        high_value_candidates.append({
+            "claim_number": c.get("claim_number"),
+            "employee_name": c.get("employee_name"),
+            "total_incurred": t_inc,
+            "total_paid": t_paid,
+            "total_reserves": t_res
+        })
+
+        # Year aggregation
+        year = c.get("claim_year")
+        if year:
+            ya = year_agg[year]
+            ya["claim_count"] += 1
+            ya["total_incurred"] += t_inc
+            ya["total_paid"] += t_paid
+            ya["total_reserves"] += t_res
+            if status == "Open":
+                ya["open_count"] += 1
+            elif status == "Closed":
+                ya["closed_count"] += 1
+
+        # Carrier aggregation
+        carrier = c.get("carrier_name") or "Unknown"
+        ca = carrier_agg[carrier]
+        ca["claim_count"] += 1
+        ca["total_incurred"] += t_inc
+        ca["total_paid"] += t_paid
+        ca["total_reserves"] += t_res
+
+    total_paid_all = total_medical_paid + total_indemnity_paid + total_expense_paid
+    total_reserves_all = total_medical_reserve + total_indemnity_reserve + total_expense_reserve
+
+    # ── Observations ─────────────────────────────────────────────────────
+    observations: List[Observation] = []
+
+    if litigated_count > 0:
+        observations.append(Observation(
+            category="risk",
+            message=f"{litigated_count} claim(s) are in litigation — may require increased reserves."
+        ))
+
+    if reopened_count > 0:
+        observations.append(Observation(
+            category="warning",
+            message=f"{reopened_count} claim(s) have been reopened — review for reserve adequacy."
+        ))
+
+    if total_reserves_all > total_paid_all and total_paid_all > 0:
+        ratio = total_reserves_all / total_paid_all
+        observations.append(Observation(
+            category="info",
+            message=f"Total reserves (${total_reserves_all:,.2f}) exceed total paid (${total_paid_all:,.2f}) by {ratio:.1f}x — indicates open exposure."
+        ))
+
+    if status_counts["Open"] > 0:
+        observations.append(Observation(
+            category="info",
+            message=f"{status_counts['Open']} claim(s) are still open."
+        ))
+
+    if total_reserves_all == 0 and status_counts["Open"] == 0:
+        observations.append(Observation(
+            category="info",
+            message="All claims are closed with zero outstanding reserves."
+        ))
+
+    # High-value threshold: claims > $100k
+    high_value_over_100k = [hv for hv in high_value_candidates if hv["total_incurred"] > 100000]
+    if high_value_over_100k:
+        observations.append(Observation(
+            category="risk",
+            message=f"{len(high_value_over_100k)} claim(s) exceed $100,000 in total incurred — flag for management review."
+        ))
+
+    # ── Build response ───────────────────────────────────────────────────
+    # Top 5 high-value claims
+    high_value_candidates.sort(key=lambda x: x["total_incurred"], reverse=True)
+    top_5 = [HighValueClaim(**hv) for hv in high_value_candidates[:5]]
+
+    # Year breakdown sorted
+    year_breakdown = sorted([
+        YearBreakdown(year=yr, **data)
+        for yr, data in year_agg.items()
+    ], key=lambda x: x.year)
+
+    # Carrier breakdown sorted by total_incurred desc
+    carrier_list = sorted([
+        CarrierBreakdown(carrier_name=name, **data)
+        for name, data in carrier_agg.items()
+    ], key=lambda x: x.total_incurred, reverse=True)
+
+    return ClaimAnalysisResponse(
+        success=True,
+        report_title="Insurance Claims Analysis Report",
+        generated_at=datetime.now().isoformat(),
+        executive_summary=ExecutiveSummary(
+            total_claims=len(claims),
+            total_incurred=round(total_incurred, 2),
+            total_paid=round(total_paid_all, 2),
+            medical_paid=round(total_medical_paid, 2),
+            indemnity_paid=round(total_indemnity_paid, 2),
+            expense_paid=round(total_expense_paid, 2),
+            total_reserves=round(total_reserves_all, 2),
+            medical_reserve=round(total_medical_reserve, 2),
+            indemnity_reserve=round(total_indemnity_reserve, 2),
+            expense_reserve=round(total_expense_reserve, 2),
+            claims_status=ClaimsStatus(
+                closed=status_counts["Closed"],
+                open=status_counts["Open"],
+                reopened=status_counts["Reopened"],
+                other=status_counts["Other"]
+            ),
+            litigated_claims=litigated_count,
+            reopened_claims=reopened_count
+        ),
+        claims_overview=claim_details,
+        year_wise_breakdown=year_breakdown,
+        carrier_breakdown=carrier_list,
+        top_high_value_claims=top_5,
+        litigated_claims_list=litigated_list,
+        observations=observations
+    )
+
+@router.post(
+    "/api/claim-analysis-report",
+    summary="Get Formatted Markdown Report",
+    description=(
+        "Generate a **formatted Markdown** Insurance Claims Analysis Report.\n\n"
+        "This returns the same analysis as `/api/claim-analysis` but as a "
+        "clean, deterministic Markdown document ready for display or download."
+    ),
+    tags=["AI Summary"]
+)
+async def get_claim_analysis_report(body: ClaimSummaryRequest):
+    """
+    Generate a formatted Markdown report for provided claims data.
+    """
+    try:
+        # Generate the structured analysis first
+        analysis = await get_claim_analysis(body)
+        
+        # Convert to Markdown
+        report_md = generate_markdown_report(analysis)
+        
+        return PlainTextResponse(content=report_md)
+        
+    except Exception as e:
+        print(f"❌ Error generating markdown report: {e}")
+        return JSONResponse({"error": str(e), "success": False}, status_code=500)
+
