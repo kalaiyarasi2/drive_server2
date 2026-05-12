@@ -242,8 +242,10 @@ CRITICAL INSTRUCTION: You MUST follow the structure below EXACTLY. Do NOT omit a
 - **Expense Payments**: 
   - Total: ${stats['total_expense_paid']:,.2f}
   - Breakdown: (List claim numbers and amounts for those with non-zero expense payments)
-- **Indemnity Payments**: ${stats['total_indemnity_paid']:,.2f} (Mention if $0.00 for all claims or provide breakdown)
-
+- **Indemnity Payments**:
+    - Total: ${stats['total_indemnity_paid']:,.2f}
+    - Breakdown: (List claim numbers and amounts for those with non-zero indemnity payments)
+    
 ## 3. Observations & Risk Flags
 - **High Value Claims**: (Identify specific claims by name/number)
 - **Anomalies**: (Identify specific issues like zero-payment closed claims)
