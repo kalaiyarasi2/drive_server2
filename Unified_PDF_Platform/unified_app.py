@@ -110,7 +110,7 @@ async def health_check():
         "status": "ok",
         "message": "Cognethro Unified PDF Platform is running",
         "version": API_VERSION,
-        "supported_types": ["PDF", "XLSX", "XLS", "CSV"],
+        "supported_types": ["PDF"],
         "extract_endpoint": "POST /api/extract  (multipart/form-data, field name: 'file')",
         "example_curl": 'curl -X POST http://<host>:8008/api/extract -F "file=@yourfile.pdf"'
     }

@@ -1205,7 +1205,9 @@ class UnifiedRouter:
 
         return None, None
 
-    def classify_document(self, file_path, request_id=None):
+    #def classify_document(self, file_path, request_id=None):
+    def classify_document(self, file_path, request_id=None, original_filename=None):
+
         """Layer 1 & 2: Classify type and identify provider.
 
         Accuracy-first redesign:
@@ -1220,7 +1222,8 @@ class UnifiedRouter:
         print("="*70)
 
         file_path = Path(file_path)
-        filename = file_path.name
+        #filename = file_path.name
+        filename = original_filename if original_filename else file_path.name
         file_ext = file_path.suffix.lower()
         print(f"[FILE] Processing: {filename} ({file_ext})")
 
@@ -2717,7 +2720,12 @@ Return ONLY the company name or UNKNOWN:"""
                 working_path = Path(self._detect_rotation_and_fix(str(file_path), tmp_dir))
             
             # Step 1: Classify (Layer 1 & 2)
-            doc_type, provider = self.classify_document(str(working_path), request_id=request_id)
+            #doc_type, provider = self.classify_document(str(working_path), request_id=request_id)
+            doc_type, provider = self.classify_document(
+                str(working_path), 
+                request_id=request_id,
+                original_filename=file_path.name
+            )
             
             if doc_type == "UNKNOWN":
                 print("\n" + "="*70)

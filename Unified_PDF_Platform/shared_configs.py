@@ -53,8 +53,8 @@ async def _perform_extraction(file: UploadFile, request: Request):
     # Sanitize: strip path separators to prevent path-traversal
     safe_filename = re.sub(r'[\\/:*?"<>|]', "_", raw_filename)
     file_ext = Path(safe_filename).suffix.lower()
-    if file_ext not in [".pdf", ".xlsx", ".xls", ".csv"]:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type '{file_ext}'. Only PDF, Excel and CSV files are accepted.")
+    if file_ext != ".pdf":
+        raise HTTPException(status_code=400, detail=f"Unsupported file type '{file_ext}'. Only PDF files are accepted.")
 
     print(f"\n[Unified][API] Received request for: {safe_filename}")
 
