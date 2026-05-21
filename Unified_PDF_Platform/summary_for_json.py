@@ -170,18 +170,24 @@ class UniversalDocumentAnalyzer:
             stats = self._calculate_claims_statistics(items)
             total_paid = stats["total_medical_paid"] + stats["total_indemnity_paid"] + stats["total_expense_paid"]
             total_reserves = stats["total_medical_reserve"] + stats["total_indemnity_reserve"] + stats["total_expense_reserve"]
+            average_claim = round(total_paid / stats["total_claims"], 2) if stats["total_claims"] > 0 else 0.0
             
             context_stats = f"""
 DOC_TYPE: Insurance Claims
 STATISTICS:
 - Total Claims: {stats['total_claims']}
-- Status Breakdown: {json.dumps(stats['status_breakdown'])}
 - Total Incurred: ${stats['total_incurred']:,.2f}
 - Total Paid: ${total_paid:,.2f}
+- Average Claim: {average_claim}
 - Medical Paid: ${stats['total_medical_paid']:,.2f}
 - Indemnity Paid: ${stats['total_indemnity_paid']:,.2f}
 - Expense Paid: ${stats['total_expense_paid']:,.2f}
 - Total Reserves: ${total_reserves:,.2f}
+- **Claims Status**: 
+  - Closed: {stats['status_breakdown'].get('Closed', 0)}
+  - Open: {stats['status_breakdown'].get('Open', 0)}
+  - Reopened: {stats['status_breakdown'].get('Reopened', 0)}
+  - Other: {stats['status_breakdown'].get('Other', 0)}
 - Litigated Count: {stats['litigated_count']}
 - Reopened Count: {stats['reopened_count']}
 """
@@ -207,6 +213,7 @@ CRITICAL INSTRUCTION: You MUST follow the structure below EXACTLY. Do NOT omit a
 - **Total Claims**: {stats['total_claims']}
 - **Total Incurred**: ${stats['total_incurred']:,.2f}
 - **Total Paid**: ${total_paid:,.2f}
+- **Average Claim**: {average_claim}
   - **Medical Paid**: ${stats['total_medical_paid']:,.2f}
   - **Indemnity Paid**: ${stats['total_indemnity_paid']:,.2f}
 - **Total Reserves**: ${total_reserves:,.2f}
