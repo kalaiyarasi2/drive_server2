@@ -30,6 +30,13 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 # Import summary router
 from summary_api import router as summary_router
+from accord_summary_api import router as accord_summary_router
+from ai_summary_file import router as ai_summary_router
+from combined_summary_api import router as combined_summary_router
+from management_claims_dashboard_api import router as management_claims_dashboard_router
+# Force server reload: updated combined summary parsing schema
+#from claims_dashboard_api import router as claims_dashboard_router
+
 
 # Import monitoring components
 from monitor import add_monitoring_to_app
@@ -72,6 +79,12 @@ app.add_middleware(
 # BASE_DIR and UPLOAD_DIR are now defined at the top
 # Include summary_api router
 app.include_router(summary_router)
+app.include_router(accord_summary_router)
+app.include_router(combined_summary_router)
+app.include_router(ai_summary_router)
+app.include_router(management_claims_dashboard_router)
+#app.include_router(claims_dashboard_router)
+
 
 @app.get("/monitor", include_in_schema=False)
 async def monitor_dashboard():
