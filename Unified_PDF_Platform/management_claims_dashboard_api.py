@@ -325,16 +325,16 @@ class ManagementDashboardAnalyzer:
         self.client = OpenAI(api_key=self.api_key)
 
     @staticmethod
-    def filter_by_year(df: pd.DataFrame, year: int) -> pd.DataFrame:
+    def filter_by_year(df: pd.DataFrame, year: Optional[int] = None) -> pd.DataFrame:
         """
         Filter DataFrame to include only rows from the specified year.
         
         Args:
             df: Input DataFrame
-            year: Year to filter by (e.g., 2025)
+            year: Year to filter by (e.g., 2025). If None, returns all data but still shows year distribution.
             
         Returns:
-            Filtered DataFrame containing only claims from the specified year
+            Filtered DataFrame containing only claims from the specified year (or all data if year=None)
         """
         # List of possible date column names
         date_columns = ["Date of Loss", "Accident Date", "Loss Date", "DOL", "Incident Date"]
@@ -379,14 +379,17 @@ class ManagementDashboardAnalyzer:
         year_counts = df_copy['_temp_year'].value_counts().sort_index()
         print(f"📊 Year distribution in data: {year_counts.to_dict()}")
         
-        # Filter by year
-        filtered = df_copy[df_copy['_temp_year'] == year].copy()
+        # Filter by year if specified, otherwise return all data
+        if year is not None:
+            filtered = df_copy[df_copy['_temp_year'] == year].copy()
+            print(f"🔍 Filtered by year {year}: {len(df)} rows → {len(filtered)} rows")
+        else:
+            filtered = df_copy.copy()
+            print(f"🔍 No year filter applied (year=0): {len(df)} rows → {len(df)} rows (all years included)")
         
         # Remove temporary year column
         if '_temp_year' in filtered.columns:
             filtered = filtered.drop(columns=['_temp_year'])
-        
-        print(f"🔍 Filtered by year {year}: {len(df)} rows → {len(filtered)} rows")
         
         return filtered
 
@@ -467,7 +470,7 @@ class ManagementDashboardAnalyzer:
                 bins = [-1, 30, 90, 180, 365, float("inf")]
                 labels = ["0-30 Days", "31-90 Days", "91-180 Days", "181-365 Days", "Over 365 Days"]
                 open_df["Aging Bucket"] = pd.cut(open_df["Days Open"], bins=bins, labels=labels)
-                aging_summary = open_df.groupby("Aging Bucket").agg(
+                aging_summary = open_df.groupby("Aging Bucket", observed=True).agg(
                     Claim_Count=("Claim Number", "count") if "Claim Number" in df.columns else ("Total Net Incurred", "count"),
                     Total_Reserve=("Total Reserve", "sum") if "Total Reserve" in df.columns else ("Total Net Incurred", "sum"),
                     Total_Incurred=("Total Net Incurred", "sum") if "Total Net Incurred" in df.columns else ("Total Net Incurred", "sum")
@@ -607,14 +610,13 @@ class ManagementDashboardAnalyzer:
                         
                         total_rows_before += len(df)
                         
-                        # Apply year filter if provided
-                        if year_filter is not None:
-                            df = ManagementDashboardAnalyzer.filter_by_year(df, year_filter)
-                            
-                            # Skip sheet if no data after filtering
-                            if df.empty:
-                                print(f"Sheet {sheet_name}: No data for year {year_filter}, skipping.")
-                                continue
+                        # Always call filter function to show logs (even for year_filter=None)
+                        df = ManagementDashboardAnalyzer.filter_by_year(df, year_filter)
+                        
+                        # Skip sheet if no data after filtering
+                        if df.empty:
+                            print(f"Sheet {sheet_name}: No data for year {year_filter}, skipping.")
+                            continue
                         
                         total_rows_after += len(df)
 
@@ -699,7 +701,7 @@ async def generate_management_dashboard(
     download: bool = Query(True, description="Return a .txt file (true) or JSON (false)"),
     model: str = Query("gpt-4o", description="OpenAI model to use"),
     temperature: float = Query(0.2, description="Sampling temperature"),
-    year: Optional[int] = Query(None, description="Filter by accident year (e.g., 2025). Leave empty to include all years."),
+    year: int = Query(..., description="Filter by accident year. Use 0 for all years, or specify a year (e.g., 2025, 2026)"),
 ):
     filename = (file.filename or "").strip()
     if not filename:
@@ -714,13 +716,16 @@ async def generate_management_dashboard(
 
     tmp_input_path = None
     try:
-        # Validate year if provided
-        if year is not None:
+        # year=0 means all years, otherwise filter by specific year
+        year_filter = None if year == 0 else year
+        
+        # Validate year if not 0
+        if year != 0:
             current_year = pd.Timestamp.today().year
             if year < 1900 or year > current_year + 1:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid year '{year}'. Year must be between 1900 and {current_year + 1}."
+                    detail=f"Invalid year '{year}'. Year must be 0 (all years) or between 1900 and {current_year + 1}."
                 )
         
         # Save upload to temp
@@ -730,13 +735,13 @@ async def generate_management_dashboard(
 
         # Process
         analyzer = ManagementDashboardAnalyzer()
-        excel_text, metrics_json, filter_metadata = analyzer.excel_to_text(tmp_input_path, year_filter=year)
+        excel_text, metrics_json, filter_metadata = analyzer.excel_to_text(tmp_input_path, year_filter=year_filter)
 
         if not excel_text.strip():
-            if year is not None:
+            if year_filter is not None:
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"No data found for year {year}. The Excel file may not contain claims from this year."
+                    detail=f"No data found for year {year_filter}. The Excel file may not contain claims from this year."
                 )
             else:
                 raise HTTPException(status_code=400, detail="Excel file has no readable data.")
@@ -746,7 +751,7 @@ async def generate_management_dashboard(
             metrics_json=metrics_json,
             model=model,
             temperature=temperature,
-            year_filter=year,
+            year_filter=year_filter,
         )
         
         # Add filter information to dashboard text
