@@ -338,27 +338,46 @@ class ManagementDashboardAnalyzer:
         """
         # List of possible date column names
         date_columns = ["Date of Loss", "Accident Date", "Loss Date", "DOL", "Incident Date"]
-        date_column = None
+        year_columns = ["Accident Year", "Loss Year", "Year"]  # Direct year columns
         
-        # Find the first matching date column
-        for col in date_columns:
+        date_column = None
+        year_column = None
+        
+        # First, check if there's a direct year column (faster and more accurate)
+        for col in year_columns:
             if col in df.columns:
-                date_column = col
+                year_column = col
                 break
         
-        # If no date column found, return original DataFrame
-        if date_column is None:
-            print(f"Warning: No date column found in {df.columns.tolist()}. Cannot filter by year.")
+        # If no year column, look for date columns
+        if year_column is None:
+            for col in date_columns:
+                if col in df.columns:
+                    date_column = col
+                    break
+        
+        # If neither found, return original DataFrame
+        if year_column is None and date_column is None:
+            print(f"⚠️  Warning: No date or year column found in {df.columns.tolist()}. Cannot filter by year.")
             return df
         
         # Create a copy to avoid modifying original
         df_copy = df.copy()
         
-        # Convert to datetime (handles various formats)
-        df_copy[date_column] = pd.to_datetime(df_copy[date_column], errors='coerce')
+        # Extract year based on column type
+        if year_column is not None:
+            # Direct year column - use as is
+            print(f"✓ Using year column: '{year_column}' for year filtering")
+            df_copy['_temp_year'] = pd.to_numeric(df_copy[year_column], errors='coerce')
+        else:
+            # Date column - extract year from date
+            print(f"✓ Using date column: '{date_column}' for year filtering")
+            df_copy[date_column] = pd.to_datetime(df_copy[date_column], errors='coerce')
+            df_copy['_temp_year'] = df_copy[date_column].dt.year
         
-        # Extract year
-        df_copy['_temp_year'] = df_copy[date_column].dt.year
+        # Log year distribution before filtering
+        year_counts = df_copy['_temp_year'].value_counts().sort_index()
+        print(f"📊 Year distribution in data: {year_counts.to_dict()}")
         
         # Filter by year
         filtered = df_copy[df_copy['_temp_year'] == year].copy()
@@ -367,7 +386,7 @@ class ManagementDashboardAnalyzer:
         if '_temp_year' in filtered.columns:
             filtered = filtered.drop(columns=['_temp_year'])
         
-        print(f"Filtered by year {year}: {len(df)} rows → {len(filtered)} rows")
+        print(f"🔍 Filtered by year {year}: {len(df)} rows → {len(filtered)} rows")
         
         return filtered
 
@@ -765,8 +784,12 @@ async def generate_management_dashboard(
             "filter_info": filter_metadata
         })
 
+    except HTTPException:
+        # Re-raise HTTP exceptions (they're already properly formatted)
+        raise
     except Exception as e:
         print(f"ERROR: {e}")
+        traceback.print_exc()
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     finally:
         if tmp_input_path and os.path.exists(tmp_input_path):
